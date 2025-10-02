@@ -115,7 +115,7 @@ class UnifiedFaceDetector:
                 
             elif self.method == 'yunet':
                 # Set default YuNet model path if not provided
-                default_yunet_path = '/home/dowan/EdgeFace/libfacedetection/opencv_zoo/models/face_detection_yunet/face_detection_yunet_2023mar.onnx'
+                default_yunet_path = os.path.join(os.path.dirname(__file__), 'models', 'face_detection_yunet_2023mar.onnx')
                 model_path = kwargs.get('model_path', default_yunet_path)
                 self.detector = YuNetDetector(model_path=model_path, device=self.device, crop_size=self.crop_size)
                 self.available = True
