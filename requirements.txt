@@ -1,0 +1,26 @@
+# Face Alignment Benchmark Requirements
+# Note: PyTorch and TensorFlow are excluded as they require device-specific installation
+# Install PyTorch: https://pytorch.org/get-started/locally/
+# Install TensorFlow: https://www.tensorflow.org/install
+
+# Core dependencies
+numpy>=1.21.0
+opencv-python>=4.5.0
+Pillow>=9.0.0
+
+# Deep learning inference
+onnxruntime>=1.12.0  # CPU version (use onnxruntime-gpu for GPU support)
+
+# Data processing and visualization
+pandas>=1.3.0
+matplotlib>=3.4.0
+seaborn>=0.11.0
+scikit-learn>=1.0.0
+
+# Utilities
+tqdm>=4.62.0
+psutil>=5.8.0
+
+# Optional: Face detection backends (install as needed)
+# mediapipe>=0.9.0  # For MediaPipe face detection
+# ultralytics>=8.0.0  # For YOLOv8 face detection
