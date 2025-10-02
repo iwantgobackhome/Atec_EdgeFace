@@ -223,20 +223,49 @@ class UnifiedFaceDetector:
     def align(self, image: Union[str, Image.Image]) -> Optional[Image.Image]:
         """
         Align the first detected face
-        
+
         Args:
             image: PIL Image or path to image
-            
+
         Returns:
             Aligned face image or None if no face detected
         """
         if not self.available:
             return None
-        
+
         # Load image if path is provided
         if isinstance(image, str):
             image = Image.open(image).convert('RGB')
-        
+
+        return self.detector.align(image)
+
+    def align_face(self, image: Union[str, Image.Image], landmarks: np.ndarray) -> Optional[Image.Image]:
+        """
+        Align face using provided landmarks
+
+        Args:
+            image: PIL Image or path to image
+            landmarks: Facial landmarks array [x1,y1,x2,y2,x3,y3,x4,y4,x5,y5]
+
+        Returns:
+            Aligned face image or None if alignment fails
+        """
+        if not self.available:
+            return None
+
+        # Load image if path is provided
+        if isinstance(image, str):
+            image = Image.open(image).convert('RGB')
+
+        # If detector has align_face method, use it
+        if hasattr(self.detector, 'align_face'):
+            return self.detector.align_face(image, landmarks)
+
+        # Otherwise, use align_landmarks method if available
+        if hasattr(self.detector, 'align_landmarks'):
+            return self.detector.align_landmarks(image, landmarks)
+
+        # Fallback: use the detector's align method (will detect again)
         return self.detector.align(image)
     
     def align_multi(self, image: Union[str, Image.Image], limit: Optional[int] = None) -> Tuple[np.ndarray, List[Image.Image]]:

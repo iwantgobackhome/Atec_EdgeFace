@@ -9,7 +9,9 @@ opencv-python>=4.5.0
 Pillow>=9.0.0
 
 # Deep learning inference
-onnxruntime>=1.12.0  # CPU version (use onnxruntime-gpu for GPU support)
+# Choose ONE of the following based on your hardware:
+# onnxruntime>=1.12.0  # CPU-only version
+onnxruntime-gpu>=1.23.0  # GPU version (requires CUDA, recommended for YOLO models)
 
 # Data processing and visualization
 pandas>=1.3.0
@@ -23,4 +25,7 @@ psutil>=5.8.0
 
 # Optional: Face detection backends (install as needed)
 # mediapipe>=0.9.0  # For MediaPipe face detection
-# ultralytics>=8.0.0  # For YOLOv8 face detection
+ultralytics>=8.0.0  # For YOLOv8 face detection (required for YOLO detector)
+
+# Model dependencies
+timm>=0.9.0  # PyTorch Image Models (required for EdgeFace)
