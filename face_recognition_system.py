@@ -269,6 +269,8 @@ class FaceRecognitionSystem:
         detections = []
 
         if bboxes is not None and len(bboxes) > 0:
+            # Extract embeddings for all detected faces
+            face_embeddings = []
             for bbox, lm in zip(bboxes, landmarks):
                 # Align face
                 aligned_face = self.detector.align_face(pil_img, lm)
@@ -280,16 +282,16 @@ class FaceRecognitionSystem:
 
                     # Extract embedding
                     embedding = self.recognizer.extract_embedding(face_np)
-
-                    # Find match
-                    person_id, similarity = self.ref_db.find_match(embedding, self.similarity_threshold)
-
-                    detections.append({
-                        'person_id': person_id if person_id else 'Unknown',
-                        'similarity': similarity,
+                    face_embeddings.append({
+                        'embedding': embedding,
                         'bbox': bbox,
                         'landmarks': lm
                     })
+                else:
+                    face_embeddings.append(None)
+
+            # Perform matching with assignment tracking
+            detections = self.assign_identities(face_embeddings)
 
         # Update FPS
         self.frame_count += 1
@@ -303,6 +305,81 @@ class FaceRecognitionSystem:
         annotated_frame = self.draw_results(frame.copy(), detections)
 
         return annotated_frame, detections
+
+    def assign_identities(self, face_embeddings: List[Dict]) -> List[Dict]:
+        """
+        Assign identities to detected faces using greedy assignment
+
+        Args:
+            face_embeddings: List of face embedding data
+
+        Returns:
+            List of detections with assigned identities
+        """
+        if not self.ref_db.db:
+            # No references, mark all as unknown
+            return [{
+                'person_id': 'Unknown',
+                'similarity': 0.0,
+                'bbox': fe['bbox'],
+                'landmarks': fe['landmarks']
+            } for fe in face_embeddings if fe is not None]
+
+        # Calculate similarity matrix: [num_faces x num_references]
+        candidates = []
+        for i, fe in enumerate(face_embeddings):
+            if fe is None:
+                continue
+
+            for person_id, ref_embedding in self.ref_db.db.items():
+                similarity = EdgeFaceRecognizer.cosine_similarity(fe['embedding'], ref_embedding)
+                if similarity >= self.similarity_threshold:
+                    candidates.append({
+                        'face_idx': i,
+                        'person_id': person_id,
+                        'similarity': similarity,
+                        'bbox': fe['bbox'],
+                        'landmarks': fe['landmarks']
+                    })
+
+        # Sort by similarity (highest first)
+        candidates.sort(key=lambda x: x['similarity'], reverse=True)
+
+        # Greedy assignment: assign each face to best match, avoiding duplicates
+        assigned_faces = set()
+        assigned_persons = set()
+        detections = []
+
+        for candidate in candidates:
+            face_idx = candidate['face_idx']
+            person_id = candidate['person_id']
+
+            # Skip if face or person already assigned
+            if face_idx in assigned_faces or person_id in assigned_persons:
+                continue
+
+            # Assign this match
+            detections.append({
+                'person_id': person_id,
+                'similarity': candidate['similarity'],
+                'bbox': candidate['bbox'],
+                'landmarks': candidate['landmarks']
+            })
+
+            assigned_faces.add(face_idx)
+            assigned_persons.add(person_id)
+
+        # Add unmatched faces as Unknown
+        for i, fe in enumerate(face_embeddings):
+            if fe is not None and i not in assigned_faces:
+                detections.append({
+                    'person_id': 'Unknown',
+                    'similarity': 0.0,
+                    'bbox': fe['bbox'],
+                    'landmarks': fe['landmarks']
+                })
+
+        return detections
 
     def draw_results(self, frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
         """Draw detection results on frame"""
