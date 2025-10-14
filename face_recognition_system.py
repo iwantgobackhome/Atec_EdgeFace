@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import pickle
 import time
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from PIL import Image
@@ -27,6 +28,95 @@ sys.path.insert(0, 'face_alignment')
 
 from backbones import get_model
 from face_alignment.unified_detector import UnifiedFaceDetector
+
+
+class FaceAngleCalculator:
+    """Calculate face pose angles from landmarks"""
+
+    @staticmethod
+    def calculate_head_pose(landmarks: np.ndarray) -> Tuple[float, float, float]:
+        """
+        Calculate head pose angles (yaw, pitch, roll) from facial landmarks
+
+        Args:
+            landmarks: Facial landmarks array [x1, y1, x2, y2, ..., x5, y5]
+                      (left_eye, right_eye, nose, left_mouth, right_mouth)
+
+        Returns:
+            (yaw, pitch, roll) in degrees
+            yaw: left(-) / right(+) rotation
+            pitch: up(-) / down(+) rotation
+            roll: tilt left(-) / right(+)
+        """
+        if len(landmarks) < 10:
+            return 0.0, 0.0, 0.0
+
+        # Extract landmark points (5-point landmarks from most detectors)
+        left_eye = np.array([landmarks[0], landmarks[1]])
+        right_eye = np.array([landmarks[2], landmarks[3]])
+        nose = np.array([landmarks[4], landmarks[5]])
+        left_mouth = np.array([landmarks[6], landmarks[7]])
+        right_mouth = np.array([landmarks[8], landmarks[9]])
+
+        # Calculate roll (head tilt) from eye positions
+        eye_center = (left_eye + right_eye) / 2
+        dY = right_eye[1] - left_eye[1]
+        dX = right_eye[0] - left_eye[0]
+        roll = math.degrees(math.atan2(dY, dX))
+
+        # Calculate yaw (left-right rotation) from eye-nose distances
+        left_eye_nose_dist = np.linalg.norm(left_eye - nose)
+        right_eye_nose_dist = np.linalg.norm(right_eye - nose)
+        eye_distance = np.linalg.norm(right_eye - left_eye)
+
+        # Asymmetry ratio indicates yaw
+        if eye_distance > 0:
+            asymmetry = (right_eye_nose_dist - left_eye_nose_dist) / eye_distance
+            yaw = asymmetry * 90  # Scale to approximate degrees
+        else:
+            yaw = 0.0
+
+        # Calculate pitch (up-down rotation) from eye-mouth vertical distance
+        mouth_center = (left_mouth + right_mouth) / 2
+        vertical_dist = mouth_center[1] - eye_center[1]
+        expected_vertical = eye_distance * 1.5  # Typical face proportions
+
+        if expected_vertical > 0:
+            vertical_ratio = (vertical_dist - expected_vertical) / expected_vertical
+            pitch = vertical_ratio * 30  # Scale to approximate degrees
+        else:
+            pitch = 0.0
+
+        return yaw, pitch, roll
+
+    @staticmethod
+    def get_angle_category(yaw: float, pitch: float) -> str:
+        """
+        Categorize face angle into discrete bins
+
+        Args:
+            yaw: Yaw angle in degrees
+            pitch: Pitch angle in degrees
+
+        Returns:
+            Category string: 'front', 'left', 'right', 'up', 'down'
+        """
+        yaw_threshold = 20
+        pitch_threshold = 15
+
+        # Check pitch first (up/down takes priority)
+        if pitch < -pitch_threshold:
+            return 'up'
+        elif pitch > pitch_threshold:
+            return 'down'
+
+        # Then check yaw (left/right)
+        if yaw < -yaw_threshold:
+            return 'left'
+        elif yaw > yaw_threshold:
+            return 'right'
+
+        return 'front'
 
 
 class EdgeFaceRecognizer:
@@ -93,7 +183,7 @@ class EdgeFaceRecognizer:
 
 
 class ReferenceDatabase:
-    """Reference face database management"""
+    """Reference face database management with multi-angle support"""
 
     def __init__(self, db_path: str = 'reference_db.pkl'):
         """
@@ -103,12 +193,23 @@ class ReferenceDatabase:
             db_path: Path to save/load database
         """
         self.db_path = db_path
-        self.db: Dict[str, np.ndarray] = {}
+        # New structure: {person_id: {angle: embedding}}
+        self.db: Dict[str, Dict[str, np.ndarray]] = {}
         self.load()
 
-    def add_person(self, person_id: str, embedding: np.ndarray):
-        """Add or update a person's embedding"""
-        self.db[person_id] = embedding
+    def add_person(self, person_id: str, embedding: np.ndarray, angle: str = 'front'):
+        """
+        Add or update a person's embedding for specific angle
+
+        Args:
+            person_id: Person identifier
+            embedding: Face embedding
+            angle: Angle category ('front', 'left', 'right', 'up', 'down')
+        """
+        if person_id not in self.db:
+            self.db[person_id] = {}
+
+        self.db[person_id][angle] = embedding
         self.save()
 
     def remove_person(self, person_id: str):
@@ -117,13 +218,27 @@ class ReferenceDatabase:
             del self.db[person_id]
             self.save()
 
+    def remove_person_angle(self, person_id: str, angle: str):
+        """Remove specific angle for a person"""
+        if person_id in self.db and angle in self.db[person_id]:
+            del self.db[person_id][angle]
+            if not self.db[person_id]:  # If no angles left, remove person
+                del self.db[person_id]
+            self.save()
+
     def get_all_persons(self) -> List[str]:
         """Get list of all person IDs"""
         return list(self.db.keys())
 
+    def get_person_angles(self, person_id: str) -> List[str]:
+        """Get list of captured angles for a person"""
+        if person_id in self.db:
+            return list(self.db[person_id].keys())
+        return []
+
     def find_match(self, query_embedding: np.ndarray, threshold: float = 0.5) -> Tuple[Optional[str], float]:
         """
-        Find best matching person
+        Find best matching person across all angles
 
         Args:
             query_embedding: Query face embedding
@@ -138,11 +253,13 @@ class ReferenceDatabase:
         best_match = None
         best_similarity = threshold
 
-        for person_id, ref_embedding in self.db.items():
-            similarity = EdgeFaceRecognizer.cosine_similarity(query_embedding, ref_embedding)
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_match = person_id
+        # Compare against all angles for all persons
+        for person_id, angles_dict in self.db.items():
+            for angle, ref_embedding in angles_dict.items():
+                similarity = EdgeFaceRecognizer.cosine_similarity(query_embedding, ref_embedding)
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = person_id
 
         return best_match, best_similarity
 
@@ -152,11 +269,35 @@ class ReferenceDatabase:
             pickle.dump(self.db, f)
 
     def load(self):
-        """Load database from disk"""
+        """Load database from disk and migrate old format if needed"""
         if os.path.exists(self.db_path):
             with open(self.db_path, 'rb') as f:
-                self.db = pickle.load(f)
-            print(f"✅ Loaded {len(self.db)} persons from database")
+                loaded_db = pickle.load(f)
+
+            # Check if migration is needed (old format: {person_id: embedding})
+            needs_migration = False
+            for person_id, value in loaded_db.items():
+                if isinstance(value, np.ndarray):
+                    needs_migration = True
+                    break
+
+            if needs_migration:
+                print("🔄 Migrating database to multi-angle format...")
+                # Convert old format to new format
+                new_db = {}
+                for person_id, embedding in loaded_db.items():
+                    if isinstance(embedding, np.ndarray):
+                        # Old format: single embedding -> convert to {'front': embedding}
+                        new_db[person_id] = {'front': embedding}
+                    else:
+                        # Already in new format
+                        new_db[person_id] = embedding
+                self.db = new_db
+                self.save()  # Save migrated version
+                print(f"✅ Migrated {len(self.db)} persons to new format")
+            else:
+                self.db = loaded_db
+                print(f"✅ Loaded {len(self.db)} persons from database")
         else:
             print("📂 New database created")
 
@@ -325,22 +466,24 @@ class FaceRecognitionSystem:
                 'landmarks': fe['landmarks']
             } for fe in face_embeddings if fe is not None]
 
-        # Calculate similarity matrix: [num_faces x num_references]
+        # Calculate similarity matrix: [num_faces x num_references x num_angles]
         candidates = []
         for i, fe in enumerate(face_embeddings):
             if fe is None:
                 continue
 
-            for person_id, ref_embedding in self.ref_db.db.items():
-                similarity = EdgeFaceRecognizer.cosine_similarity(fe['embedding'], ref_embedding)
-                if similarity >= self.similarity_threshold:
-                    candidates.append({
-                        'face_idx': i,
-                        'person_id': person_id,
-                        'similarity': similarity,
-                        'bbox': fe['bbox'],
-                        'landmarks': fe['landmarks']
-                    })
+            # Compare against all angles for each person
+            for person_id, angles_dict in self.ref_db.db.items():
+                for angle, ref_embedding in angles_dict.items():
+                    similarity = EdgeFaceRecognizer.cosine_similarity(fe['embedding'], ref_embedding)
+                    if similarity >= self.similarity_threshold:
+                        candidates.append({
+                            'face_idx': i,
+                            'person_id': person_id,
+                            'similarity': similarity,
+                            'bbox': fe['bbox'],
+                            'landmarks': fe['landmarks']
+                        })
 
         # Sort by similarity (highest first)
         candidates.sort(key=lambda x: x['similarity'], reverse=True)

@@ -49,6 +49,14 @@ class FaceRecognitionGUI:
         self.camera_running = False
         self.cap: Optional[cv2.VideoCapture] = None
         self.current_frame = None
+        self.current_landmarks = None
+
+        # Multi-angle capture state
+        self.capture_mode = False
+        self.capture_person_id = None
+        self.required_angles = ['front', 'left', 'right', 'up', 'down']
+        self.captured_angles = set()
+        self.angle_slots = {}
 
         # Configuration
         self.detector_var = tk.StringVar(value='mtcnn')
@@ -143,16 +151,25 @@ class FaceRecognitionGUI:
             row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
         row += 1
 
-        self.capture_btn = ttk.Button(control_frame, text="📸 Capture from Camera",
-                                       command=self.capture_reference, state='disabled')
+        self.capture_btn = ttk.Button(control_frame, text="📸 Capture Multi-Angle",
+                                       command=self.start_multi_angle_capture, state='disabled')
         self.capture_btn.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        row += 1
+
+        self.cancel_capture_btn = ttk.Button(control_frame, text="❌ Cancel Capture",
+                                              command=self.cancel_capture, state='disabled')
+        self.cancel_capture_btn.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         row += 1
 
         ttk.Button(control_frame, text="➕ Add from File", command=self.add_reference).grid(
             row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         row += 1
 
-        ttk.Button(control_frame, text="➖ Remove Reference", command=self.remove_reference).grid(
+        ttk.Button(control_frame, text="➖ Remove Person", command=self.remove_reference).grid(
+            row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        row += 1
+
+        ttk.Button(control_frame, text="🗑️ Manage Angles", command=self.manage_angles).grid(
             row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         row += 1
 
@@ -163,9 +180,15 @@ class FaceRecognitionGUI:
 
         self.ref_listbox = tk.Listbox(control_frame, height=10, width=30)
         self.ref_listbox.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.ref_listbox.bind('<<ListboxSelect>>', self.on_person_selected)
         scrollbar = ttk.Scrollbar(control_frame, orient="vertical", command=self.ref_listbox.yview)
         scrollbar.grid(row=row, column=2, sticky=(tk.N, tk.S))
         self.ref_listbox.config(yscrollcommand=scrollbar.set)
+        row += 1
+
+        # Show angles for selected person
+        self.angles_label = ttk.Label(control_frame, text="Captured angles: -", font=('', 9))
+        self.angles_label.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
         row += 1
 
         # Configure control frame grid weights
@@ -343,7 +366,18 @@ class FaceRecognitionGUI:
                     self.current_frame = frame.copy()
 
                     # Process frame
-                    annotated_frame, _ = self.system.process_frame(frame)
+                    annotated_frame, detections = self.system.process_frame(frame)
+
+                    # Handle multi-angle capture mode
+                    if self.capture_mode and len(detections) > 0:
+                        det = detections[0]  # Use first detected face
+                        if det['landmarks'] is not None:
+                            self.current_landmarks = det['landmarks']
+                            self.auto_capture_angle(det['landmarks'])
+
+                    # Draw angle capture overlay if in capture mode
+                    if self.capture_mode:
+                        annotated_frame = self.draw_angle_overlay(annotated_frame)
 
                     # Convert to RGB for display
                     display_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
@@ -378,8 +412,87 @@ class FaceRecognitionGUI:
 
             time.sleep(0.01)  # Small delay
 
-    def capture_reference(self):
-        """Capture current frame and add as reference"""
+    def draw_angle_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """Draw angle capture progress overlay on frame"""
+        h, w = frame.shape[:2]
+
+        # Create semi-transparent overlay panel on the left side
+        overlay = frame.copy()
+        panel_width = 200
+        panel_height = 250
+        panel_x = 10
+        panel_y = 60
+
+        # Draw semi-transparent background
+        cv2.rectangle(overlay, (panel_x, panel_y),
+                     (panel_x + panel_width, panel_y + panel_height),
+                     (0, 0, 0), -1)
+        frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+
+        # Title
+        cv2.putText(frame, "Capture Progress", (panel_x + 10, panel_y + 25),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        # Draw angle indicators with visual icons
+        y_offset = panel_y + 50
+        angle_positions = {
+            'front': ('Front', (panel_width // 2, 0)),
+            'left': ('Left', (20, panel_height // 2 - 40)),
+            'right': ('Right', (panel_width - 60, panel_height // 2 - 40)),
+            'up': ('Up', (panel_width // 2, -20)),
+            'down': ('Down', (panel_width // 2, panel_height - 60))
+        }
+
+        # Draw center face icon
+        center_x = panel_x + panel_width // 2
+        center_y = panel_y + panel_height // 2
+        cv2.circle(frame, (center_x, center_y), 25, (100, 100, 100), 2)
+
+        # Draw angle indicators
+        for i, angle in enumerate(self.required_angles):
+            y = y_offset + i * 35
+
+            # Status symbol
+            if angle in self.captured_angles:
+                symbol = "✓"
+                color = (0, 255, 0)
+            else:
+                symbol = "○"
+                color = (150, 150, 150)
+
+            # Draw angle name and status
+            text = f"{angle.capitalize()}: {symbol}"
+            cv2.putText(frame, text, (panel_x + 15, y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # Progress bar at bottom
+        progress = len(self.captured_angles) / len(self.required_angles)
+        bar_width = panel_width - 20
+        bar_height = 15
+        bar_x = panel_x + 10
+        bar_y = panel_y + panel_height - 30
+
+        # Background bar
+        cv2.rectangle(frame, (bar_x, bar_y),
+                     (bar_x + bar_width, bar_y + bar_height),
+                     (50, 50, 50), -1)
+
+        # Progress bar
+        progress_width = int(bar_width * progress)
+        if progress_width > 0:
+            cv2.rectangle(frame, (bar_x, bar_y),
+                         (bar_x + progress_width, bar_y + bar_height),
+                         (0, 255, 0), -1)
+
+        # Progress text
+        progress_text = f"{len(self.captured_angles)}/{len(self.required_angles)}"
+        cv2.putText(frame, progress_text, (bar_x + bar_width // 2 - 20, bar_y + bar_height + 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        return frame
+
+    def start_multi_angle_capture(self):
+        """Start multi-angle capture mode"""
         if not self.camera_running or self.current_frame is None:
             messagebox.showwarning("Warning", "Camera must be running to capture")
             return
@@ -390,46 +503,83 @@ class FaceRecognitionGUI:
         if not person_id:
             return
 
-        try:
-            # Get current frame
-            frame = self.current_frame.copy()
+        # Initialize capture mode
+        self.capture_mode = True
+        self.capture_person_id = person_id
+        self.captured_angles = set()
+        self.angle_slots = {}
 
-            # Convert to PIL for detector
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(frame_rgb)
+        # Update UI
+        self.capture_btn.config(state='disabled')
+        self.cancel_capture_btn.config(state='normal')
 
-            # Detect and align face
-            self.log_status(f"📸 Capturing face for {person_id}...")
-            aligned_face = self.system.detector.align(pil_img)
+        self.log_status(f"🎯 Multi-angle capture started for {person_id}")
+        self.log_status(f"👉 Please rotate your face to capture: Front, Left, Right, Up, Down")
 
-            if aligned_face is None:
-                self.log_status(f"❌ No face detected in current frame")
-                messagebox.showerror("Error", "No face detected! Please position your face in the camera.")
-                return
+    def cancel_capture(self):
+        """Cancel multi-angle capture mode"""
+        self.capture_mode = False
+        self.capture_person_id = None
+        self.captured_angles = set()
+        self.angle_slots = {}
 
-            # Convert PIL to numpy BGR
-            face_np = np.array(aligned_face)
-            face_np = cv2.cvtColor(face_np, cv2.COLOR_RGB2BGR)
+        # Update UI
+        self.capture_btn.config(state='normal')
+        self.cancel_capture_btn.config(state='disabled')
 
-            # Extract embedding
-            embedding = self.system.recognizer.extract_embedding(face_np)
+        self.log_status("❌ Multi-angle capture cancelled")
 
-            # Add to database
-            self.system.ref_db.add_person(person_id, embedding)
+    def auto_capture_angle(self, landmarks: np.ndarray):
+        """Auto-capture when face is at specific angle"""
+        from face_recognition_system import FaceAngleCalculator
 
-            self.log_status(f"✅ Successfully captured and added {person_id}")
-            self.update_reference_list()
-            messagebox.showinfo("Success", f"Captured and added {person_id} to reference database")
+        # Calculate face angles
+        yaw, pitch, roll = FaceAngleCalculator.calculate_head_pose(landmarks)
+        angle_category = FaceAngleCalculator.get_angle_category(yaw, pitch)
 
-            # Save captured image for reference (optional)
-            os.makedirs("captured_references", exist_ok=True)
-            save_path = f"captured_references/{person_id}.jpg"
-            cv2.imwrite(save_path, cv2.cvtColor(np.array(aligned_face), cv2.COLOR_RGB2BGR))
-            self.log_status(f"💾 Saved reference image to {save_path}")
+        # Check if this angle is needed and not yet captured
+        if angle_category in self.required_angles and angle_category not in self.captured_angles:
+            # Capture this angle
+            try:
+                frame = self.current_frame.copy()
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(frame_rgb)
 
-        except Exception as e:
-            self.log_status(f"❌ Error capturing reference: {e}")
-            messagebox.showerror("Error", f"Failed to capture reference: {e}")
+                # Detect and align face
+                aligned_face = self.system.detector.align(pil_img)
+
+                if aligned_face is not None:
+                    # Convert PIL to numpy BGR
+                    face_np = np.array(aligned_face)
+                    face_np = cv2.cvtColor(face_np, cv2.COLOR_RGB2BGR)
+
+                    # Extract embedding
+                    embedding = self.system.recognizer.extract_embedding(face_np)
+
+                    # Add to database with angle
+                    self.system.ref_db.add_person(self.capture_person_id, embedding, angle_category)
+
+                    # Mark as captured
+                    self.captured_angles.add(angle_category)
+                    self.angle_slots[angle_category] = aligned_face
+
+                    # Log capture
+                    self.log_status(f"✅ Captured {angle_category} angle (Yaw: {yaw:.1f}°, Pitch: {pitch:.1f}°)")
+
+                    # Save image
+                    os.makedirs(f"captured_references/{self.capture_person_id}", exist_ok=True)
+                    save_path = f"captured_references/{self.capture_person_id}/{angle_category}.jpg"
+                    cv2.imwrite(save_path, cv2.cvtColor(np.array(aligned_face), cv2.COLOR_RGB2BGR))
+
+                    # Check if all angles captured
+                    if len(self.captured_angles) == len(self.required_angles):
+                        self.log_status(f"🎉 All angles captured for {self.capture_person_id}!")
+                        self.update_reference_list()
+                        messagebox.showinfo("Success", f"All angles captured for {self.capture_person_id}!")
+                        self.cancel_capture()
+
+            except Exception as e:
+                self.log_status(f"❌ Error capturing {angle_category} angle: {e}")
 
     def add_reference(self):
         """Add reference person from image file"""
@@ -477,12 +627,97 @@ class FaceRecognitionGUI:
             self.log_status(f"➖ Removed {person_id}")
             self.update_reference_list()
 
+    def on_person_selected(self, event=None):
+        """Handle person selection in listbox"""
+        selection = self.ref_listbox.curselection()
+        if not selection:
+            self.angles_label.config(text="Captured angles: -")
+            return
+
+        person_id = self.ref_listbox.get(selection[0])
+        angles = self.system.ref_db.get_person_angles(person_id)
+
+        if angles:
+            angle_text = ", ".join(sorted(angles))
+            self.angles_label.config(text=f"Captured angles: {angle_text}")
+        else:
+            self.angles_label.config(text="Captured angles: None")
+
+    def manage_angles(self):
+        """Open angle management dialog"""
+        selection = self.ref_listbox.curselection()
+
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a person first")
+            return
+
+        person_id = self.ref_listbox.get(selection[0])
+        angles = self.system.ref_db.get_person_angles(person_id)
+
+        if not angles:
+            messagebox.showinfo("Info", f"{person_id} has no captured angles")
+            return
+
+        # Create dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Manage Angles - {person_id}")
+        dialog.geometry("400x300")
+
+        ttk.Label(dialog, text=f"Captured angles for {person_id}:",
+                 font=('', 10, 'bold')).pack(pady=10)
+
+        # Listbox with angles
+        frame = ttk.Frame(dialog)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        angle_listbox = tk.Listbox(frame, height=8)
+        angle_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=angle_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        angle_listbox.config(yscrollcommand=scrollbar.set)
+
+        for angle in sorted(angles):
+            angle_listbox.insert(tk.END, angle)
+
+        # Buttons
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+
+        def delete_selected_angle():
+            sel = angle_listbox.curselection()
+            if not sel:
+                messagebox.showwarning("Warning", "Please select an angle to delete")
+                return
+
+            angle = angle_listbox.get(sel[0])
+
+            if messagebox.askyesno("Confirm", f"Delete {angle} angle for {person_id}?"):
+                self.system.ref_db.remove_person_angle(person_id, angle)
+                self.log_status(f"🗑️ Deleted {angle} angle for {person_id}")
+                angle_listbox.delete(sel[0])
+
+                # Update main UI
+                self.on_person_selected()
+
+                # If no angles left, close dialog
+                if angle_listbox.size() == 0:
+                    messagebox.showinfo("Info", f"All angles deleted for {person_id}")
+                    dialog.destroy()
+                    self.update_reference_list()
+
+        ttk.Button(btn_frame, text="Delete Selected Angle", command=delete_selected_angle).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
     def update_reference_list(self):
         """Update reference list display"""
         self.ref_listbox.delete(0, tk.END)
         persons = self.system.ref_db.get_all_persons()
         for person in sorted(persons):
             self.ref_listbox.insert(tk.END, person)
+
+        # Update angles display if a person is selected
+        self.on_person_selected()
 
     def on_closing(self):
         """Handle window close"""
