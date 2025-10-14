@@ -27,22 +27,59 @@ class YOLOFaceDetector:
         
         if model_path is None:
             model_path = self._get_model_path()
-        
+
+        self.model_path = model_path  # Store for potential CPU fallback
+
         if not os.path.exists(model_path):
             print(f"YOLO model not found: {model_path}")
             self.session = None
         else:
             try:
-                # Initialize ONNX Runtime session
-                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if device == 'cuda' else ['CPUExecutionProvider']
-                self.session = ort.InferenceSession(model_path, providers=providers)
-                
+                # Initialize ONNX Runtime session with GPU support
+                available_providers = ort.get_available_providers()
+
+                if device == 'cuda':
+                    if 'CUDAExecutionProvider' in available_providers:
+                        # Use CUDA with fallback on error
+                        cuda_options = {
+                            'device_id': 0,
+                            'arena_extend_strategy': 'kNextPowerOfTwo',
+                            'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                            'do_copy_in_default_stream': True,
+                        }
+                        providers = [
+                            ('CUDAExecutionProvider', cuda_options),
+                            'CPUExecutionProvider'
+                        ]
+                        print(f"YOLOFaceDetector: Attempting CUDA GPU (with CPU fallback)")
+                    else:
+                        providers = ['CPUExecutionProvider']
+                        print(f"⚠️ YOLOFaceDetector: CUDA requested but not available, using CPU")
+                        print(f"   Available providers: {available_providers}")
+                else:
+                    providers = ['CPUExecutionProvider']
+
+                try:
+                    self.session = ort.InferenceSession(model_path, providers=providers)
+                except Exception as cuda_error:
+                    if device == 'cuda':
+                        print(f"⚠️ CUDA initialization failed: {str(cuda_error)[:100]}")
+                        print(f"   Falling back to CPU execution")
+                        providers = ['CPUExecutionProvider']
+                        self.session = ort.InferenceSession(model_path, providers=providers)
+                    else:
+                        raise
+
+                # Verify which provider is actually being used
+                actual_providers = self.session.get_providers()
+                print(f"YOLOFaceDetector: Active providers: {actual_providers}")
+
                 # Get model input info
                 self.input_name = self.session.get_inputs()[0].name
                 self.input_shape = self.session.get_inputs()[0].shape
                 self.input_height = self.input_shape[2] if len(self.input_shape) > 2 else 640
                 self.input_width = self.input_shape[3] if len(self.input_shape) > 3 else 640
-                
+
             except Exception as e:
                 print(f"Failed to initialize YOLO model: {e}")
                 self.session = None
@@ -296,21 +333,42 @@ class YOLOFaceDetector:
         if self.session is None:
             print("YOLO model not available")
             return np.array([]), np.array([])
-        
+
         try:
             # Preprocess
             img_input, scale, orig_size, padding = self._preprocess_image(image)
-            
+
             # Run inference
             outputs = self.session.run(None, {self.input_name: img_input})
-            
+
             # Postprocess
             bboxes, landmarks = self._postprocess_outputs(outputs, scale, orig_size, padding)
-            
+
             return bboxes, landmarks
-            
+
         except Exception as e:
-            print(f"YOLO detection failed: {e}")
+            error_msg = str(e)
+            # Check if it's a CUDA compute capability error
+            if 'cudaErrorNoKernelImageForDevice' in error_msg or 'no kernel image is available' in error_msg:
+                if not hasattr(self, '_cuda_fallback_warned'):
+                    print(f"⚠️ CUDA execution failed (compute capability incompatibility)")
+                    print(f"   Reinitializing with CPU execution provider...")
+                    self._cuda_fallback_warned = True
+
+                    # Reinitialize with CPU
+                    try:
+                        self.session = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'])
+                        print(f"   Successfully switched to CPU execution")
+
+                        # Retry with CPU
+                        outputs = self.session.run(None, {self.input_name: img_input})
+                        bboxes, landmarks = self._postprocess_outputs(outputs, scale, orig_size, padding)
+                        return bboxes, landmarks
+                    except Exception as cpu_error:
+                        print(f"   CPU fallback also failed: {cpu_error}")
+                        return np.array([]), np.array([])
+            else:
+                print(f"YOLO detection failed: {e}")
             return np.array([]), np.array([])
 
     def align(self, image: Image.Image) -> Optional[Image.Image]:

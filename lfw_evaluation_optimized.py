@@ -298,6 +298,10 @@ class LFWEvaluatorOptimized:
                 emb1_batch = self._extract_embeddings_batch(batch_aligned1)
                 emb2_batch = self._extract_embeddings_batch(batch_aligned2)
 
+                # Explicitly free aligned face images from memory
+                del batch_aligned1
+                del batch_aligned2
+
                 # Vectorized similarity computation
                 norms1 = np.linalg.norm(emb1_batch, axis=1, keepdims=True)
                 norms2 = np.linalg.norm(emb2_batch, axis=1, keepdims=True)
@@ -305,6 +309,16 @@ class LFWEvaluatorOptimized:
 
                 all_similarities.extend(similarities.tolist())
                 all_labels.extend(batch_labels)
+
+                # Clean up embeddings from memory
+                del emb1_batch
+                del emb2_batch
+                del similarities
+                del norms1
+                del norms2
+
+            # Clean up loaded pairs from memory
+            del loaded_pairs
 
         elapsed_time = time.time() - batch_start_time
 

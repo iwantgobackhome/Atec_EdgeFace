@@ -179,17 +179,28 @@ try:
         print(f"Evaluating {method.upper()}...")
         print('='*60)
 
-        # Clean memory before each method
+        # Aggressive memory cleanup before each method
         gc.collect()
+        gc.collect()  # Call twice for thorough cleanup
         if device == 'cuda':
             torch.cuda.empty_cache()
+            torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
             method_start_gpu_mem = torch.cuda.memory_allocated() / 1024**2
+        else:
+            method_start_gpu_mem = 0
 
         method_start_cpu_mem = process.memory_info().rss / 1024**2
 
         # Evaluate single method
         method_results = evaluator.evaluate_all_methods([method], max_pairs=LFW_CONFIG['max_pairs'])
+
+        # Aggressive memory cleanup after evaluation
+        gc.collect()
+        gc.collect()
+        if device == 'cuda':
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
         # Track peak memory usage
         method_end_cpu_mem = process.memory_info().rss / 1024**2

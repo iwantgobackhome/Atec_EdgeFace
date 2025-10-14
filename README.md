@@ -398,6 +398,38 @@ aligned_face = detector.align(image)
 
 ## 🔧 트러블슈팅
 
+### WSL 카메라 연결 설정
+
+WSL2에서 USB 카메라를 사용하려면 Windows의 PowerShell에서 USB 장치를 WSL로 연결해야 합니다.
+
+**1. PowerShell에서 USB 장치 확인** (관리자 권한 필요)
+```powershell
+usbipd list
+```
+
+**2. 카메라 연결**
+```powershell
+# busid는 위에서 확인한 카메라의 BUSID로 대체
+usbipd attach --wsl --busid <busid>
+```
+
+**3. 연결 확인**
+```powershell
+usbipd list
+# "Attached" 상태인지 확인
+```
+
+**4. WSL에서 카메라 인식 확인**
+```bash
+# USB 장치 목록 확인
+lsusb
+
+# 비디오 장치 확인
+ll /dev/video*
+```
+
+카메라가 정상적으로 연결되면 `/dev/video0` 등의 장치가 표시됩니다.
+
 ### CUDA 관련
 - **TensorFlow CUDA 경고**: RTX 5090 등 최신 GPU는 JIT 컴파일 사용 (정상 동작)
 - **OpenCV CUDA 없음**: YuNet이 자동으로 CPU로 fallback
