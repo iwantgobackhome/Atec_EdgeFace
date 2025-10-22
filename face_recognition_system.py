@@ -176,6 +176,49 @@ class EdgeFaceRecognizer:
 
         return embedding
 
+    @torch.no_grad()
+    def extract_embeddings_batch(self, face_imgs: List[np.ndarray]) -> List[np.ndarray]:
+        """
+        Extract face embeddings from multiple aligned face images (batch processing)
+
+        Args:
+            face_imgs: List of aligned face images (112x112x3)
+
+        Returns:
+            List of face embedding vectors (512-d each)
+        """
+        if not face_imgs:
+            return []
+
+        # Preprocess all images
+        batch_imgs = []
+        for face_img in face_imgs:
+            # Resize if needed
+            if face_img.shape[:2] != (112, 112):
+                face_img = cv2.resize(face_img, (112, 112))
+
+            # Convert BGR to RGB
+            img = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+
+            # Transpose to CHW
+            img = np.transpose(img, (2, 0, 1))
+
+            batch_imgs.append(img)
+
+        # Stack into batch
+        batch_tensor = torch.from_numpy(np.stack(batch_imgs)).float().to(self.device)
+
+        # Normalize
+        batch_tensor.div_(255).sub_(0.5).div_(0.5)
+
+        # Extract embeddings in batch
+        embeddings = self.model(batch_tensor).cpu().numpy()
+
+        # L2 normalize each embedding
+        embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+        return [emb for emb in embeddings]
+
     @staticmethod
     def cosine_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
         """Calculate cosine similarity between two embeddings"""
@@ -348,6 +391,11 @@ class FaceRecognitionSystem:
         self.frame_count = 0
         self.start_time = time.time()
 
+        # Face tracking for temporal consistency
+        self.tracked_faces = {}  # track_id -> {'bbox', 'person_id', 'similarity', 'last_seen'}
+        self.next_track_id = 0
+        self.max_tracking_frames = 10  # Max frames to keep track without detection
+
         print("✅ System initialized successfully!")
 
     def add_reference_from_image(self, image_path: str, person_id: str) -> bool:
@@ -391,7 +439,7 @@ class FaceRecognitionSystem:
 
     def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, List[Dict]]:
         """
-        Process a single frame
+        Process a single frame with batch embedding extraction
 
         Args:
             frame: Input frame (BGR)
@@ -410,9 +458,11 @@ class FaceRecognitionSystem:
         detections = []
 
         if bboxes is not None and len(bboxes) > 0:
-            # Extract embeddings for all detected faces
-            face_embeddings = []
-            for bbox, lm in zip(bboxes, landmarks):
+            # Align all detected faces first
+            aligned_faces = []
+            valid_indices = []
+
+            for i, (bbox, lm) in enumerate(zip(bboxes, landmarks)):
                 # Align face
                 aligned_face = self.detector.align_face(pil_img, lm)
 
@@ -420,19 +470,29 @@ class FaceRecognitionSystem:
                     # Convert to numpy BGR
                     face_np = np.array(aligned_face)
                     face_np = cv2.cvtColor(face_np, cv2.COLOR_RGB2BGR)
+                    aligned_faces.append(face_np)
+                    valid_indices.append(i)
 
-                    # Extract embedding
-                    embedding = self.recognizer.extract_embedding(face_np)
-                    face_embeddings.append({
-                        'embedding': embedding,
-                        'bbox': bbox,
-                        'landmarks': lm
-                    })
-                else:
-                    face_embeddings.append(None)
+            # Extract embeddings in batch (much faster!)
+            if aligned_faces:
+                embeddings = self.recognizer.extract_embeddings_batch(aligned_faces)
 
-            # Perform matching with assignment tracking
-            detections = self.assign_identities(face_embeddings)
+                # Build face_embeddings list
+                face_embeddings = []
+                emb_idx = 0
+                for i, (bbox, lm) in enumerate(zip(bboxes, landmarks)):
+                    if i in valid_indices:
+                        face_embeddings.append({
+                            'embedding': embeddings[emb_idx],
+                            'bbox': bbox,
+                            'landmarks': lm
+                        })
+                        emb_idx += 1
+                    else:
+                        face_embeddings.append(None)
+
+                # Perform matching with assignment tracking
+                detections = self.assign_identities(face_embeddings)
 
         # Update FPS
         self.frame_count += 1
@@ -447,9 +507,45 @@ class FaceRecognitionSystem:
 
         return annotated_frame, detections
 
+    @staticmethod
+    def calculate_iou(bbox1: np.ndarray, bbox2: np.ndarray) -> float:
+        """
+        Calculate Intersection over Union (IoU) between two bounding boxes
+
+        Args:
+            bbox1: First bounding box [x1, y1, x2, y2, ...]
+            bbox2: Second bounding box [x1, y1, x2, y2, ...]
+
+        Returns:
+            IoU score (0.0 to 1.0)
+        """
+        x1_1, y1_1, x2_1, y2_1 = bbox1[:4]
+        x1_2, y1_2, x2_2, y2_2 = bbox2[:4]
+
+        # Calculate intersection area
+        x1_i = max(x1_1, x1_2)
+        y1_i = max(y1_1, y1_2)
+        x2_i = min(x2_1, x2_2)
+        y2_i = min(y2_1, y2_2)
+
+        if x2_i < x1_i or y2_i < y1_i:
+            return 0.0
+
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)
+
+        # Calculate union area
+        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+        union = area1 + area2 - intersection
+
+        if union == 0:
+            return 0.0
+
+        return intersection / union
+
     def assign_identities(self, face_embeddings: List[Dict]) -> List[Dict]:
         """
-        Assign identities to detected faces using greedy assignment
+        Assign identities to detected faces using greedy assignment with tracking
 
         Args:
             face_embeddings: List of face embedding data
@@ -457,6 +553,8 @@ class FaceRecognitionSystem:
         Returns:
             List of detections with assigned identities
         """
+        current_frame_id = self.frame_count
+
         if not self.ref_db.db:
             # No references, mark all as unknown
             return [{
@@ -466,27 +564,75 @@ class FaceRecognitionSystem:
                 'landmarks': fe['landmarks']
             } for fe in face_embeddings if fe is not None]
 
+        # Match current detections with tracked faces (temporal consistency)
+        detection_to_track = {}  # detection_idx -> track_id
+        for i, fe in enumerate(face_embeddings):
+            if fe is None:
+                continue
+
+            best_iou = 0.3  # Minimum IoU threshold for tracking
+            best_track_id = None
+
+            for track_id, track_data in self.tracked_faces.items():
+                iou = self.calculate_iou(fe['bbox'], track_data['bbox'])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_track_id = track_id
+
+            if best_track_id is not None:
+                detection_to_track[i] = best_track_id
+
         # Calculate similarity matrix: [num_faces x num_references x num_angles]
         candidates = []
         for i, fe in enumerate(face_embeddings):
             if fe is None:
                 continue
 
-            # Compare against all angles for each person
+            # Check if this detection is tracked and has a stable identity
+            if i in detection_to_track:
+                track_id = detection_to_track[i]
+                tracked_person = self.tracked_faces[track_id]['person_id']
+
+                # If tracked person is known, verify it's still the same person
+                if tracked_person != 'Unknown':
+                    # Check similarity with tracked person
+                    if tracked_person in self.ref_db.db:
+                        max_sim = 0.0
+                        for angle, ref_embedding in self.ref_db.db[tracked_person].items():
+                            sim = EdgeFaceRecognizer.cosine_similarity(fe['embedding'], ref_embedding)
+                            max_sim = max(max_sim, sim)
+
+                        # If still similar enough, keep the tracked identity
+                        if max_sim >= self.similarity_threshold * 0.8:  # Lower threshold for tracked faces
+                            candidates.append({
+                                'face_idx': i,
+                                'person_id': tracked_person,
+                                'similarity': max_sim,
+                                'bbox': fe['bbox'],
+                                'landmarks': fe['landmarks'],
+                                'priority': 1  # High priority for tracked faces
+                            })
+                            continue
+
+            # Compare against all angles for each person (normal matching)
             for person_id, angles_dict in self.ref_db.db.items():
+                max_sim = 0.0
                 for angle, ref_embedding in angles_dict.items():
                     similarity = EdgeFaceRecognizer.cosine_similarity(fe['embedding'], ref_embedding)
-                    if similarity >= self.similarity_threshold:
-                        candidates.append({
-                            'face_idx': i,
-                            'person_id': person_id,
-                            'similarity': similarity,
-                            'bbox': fe['bbox'],
-                            'landmarks': fe['landmarks']
-                        })
+                    max_sim = max(max_sim, similarity)
 
-        # Sort by similarity (highest first)
-        candidates.sort(key=lambda x: x['similarity'], reverse=True)
+                if max_sim >= self.similarity_threshold:
+                    candidates.append({
+                        'face_idx': i,
+                        'person_id': person_id,
+                        'similarity': max_sim,
+                        'bbox': fe['bbox'],
+                        'landmarks': fe['landmarks'],
+                        'priority': 0  # Normal priority
+                    })
+
+        # Sort by priority (tracked faces first), then by similarity (highest first)
+        candidates.sort(key=lambda x: (x['priority'], x['similarity']), reverse=True)
 
         # Greedy assignment: assign each face to best match, avoiding duplicates
         assigned_faces = set()
@@ -522,7 +668,62 @@ class FaceRecognitionSystem:
                     'landmarks': fe['landmarks']
                 })
 
+        # Update tracking
+        self.update_tracking(detections, current_frame_id)
+
         return detections
+
+    def update_tracking(self, detections: List[Dict], current_frame_id: int):
+        """
+        Update face tracking based on current detections
+
+        Args:
+            detections: List of current frame detections
+            current_frame_id: Current frame number
+        """
+        # Remove stale tracks
+        stale_tracks = []
+        for track_id, track_data in self.tracked_faces.items():
+            if current_frame_id - track_data['last_seen'] > self.max_tracking_frames:
+                stale_tracks.append(track_id)
+
+        for track_id in stale_tracks:
+            del self.tracked_faces[track_id]
+
+        # Update or create tracks for current detections
+        matched_tracks = set()
+
+        for det in detections:
+            # Find best matching track
+            best_iou = 0.3
+            best_track_id = None
+
+            for track_id, track_data in self.tracked_faces.items():
+                if track_id in matched_tracks:
+                    continue
+                iou = self.calculate_iou(det['bbox'], track_data['bbox'])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_track_id = track_id
+
+            if best_track_id is not None:
+                # Update existing track
+                self.tracked_faces[best_track_id].update({
+                    'bbox': det['bbox'],
+                    'person_id': det['person_id'],
+                    'similarity': det['similarity'],
+                    'last_seen': current_frame_id
+                })
+                matched_tracks.add(best_track_id)
+            else:
+                # Create new track
+                self.tracked_faces[self.next_track_id] = {
+                    'bbox': det['bbox'],
+                    'person_id': det['person_id'],
+                    'similarity': det['similarity'],
+                    'last_seen': current_frame_id
+                }
+                self.next_track_id += 1
 
     def draw_results(self, frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
         """Draw detection results on frame"""
