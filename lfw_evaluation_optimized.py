@@ -290,8 +290,7 @@ class LFWEvaluatorOptimized:
                     batch_indices.append(idx)
                 else:
                     failed_alignments += 1
-                    all_similarities.append(-1.0)
-                    all_labels.append(1 if is_same else 0)
+                    # Do NOT add failed cases to similarities/labels for metrics
 
             # Batch embedding extraction (GPU efficient!)
             if batch_aligned1:
@@ -336,7 +335,7 @@ class LFWEvaluatorOptimized:
         labels = np.array(all_labels)
 
         total_pairs = len(pairs_to_process)
-        successful_pairs = len(similarities) - failed_alignments
+        successful_pairs = len(similarities)  # Only successful alignments are in the list
         success_rate = successful_pairs / total_pairs if total_pairs > 0 else 0.0
 
         try:
