@@ -56,6 +56,13 @@ except ImportError:
     YOLO_AVAILABLE = False
     print("YOLO not available")
 
+try:
+    from yunet_npu import YuNetNPUDetector
+    YUNET_NPU_AVAILABLE = True
+except ImportError:
+    YUNET_NPU_AVAILABLE = False
+    print("YuNet NPU not available")
+
 
 class UnifiedFaceDetector:
     """
@@ -73,6 +80,7 @@ class UnifiedFaceDetector:
     AVAILABLE_METHODS = {
         'mtcnn': MTCNN_AVAILABLE,
         'yunet': YUNET_AVAILABLE,
+        'yunet_npu': YUNET_NPU_AVAILABLE,  # YuNet with DeepX NPU
         'retinaface': RETINAFACE_AVAILABLE,
         'rtmpose': RTMPOSE_AVAILABLE,
         'mediapipe': MEDIAPIPE_AVAILABLE,
@@ -118,6 +126,13 @@ class UnifiedFaceDetector:
                 default_yunet_path = os.path.join(os.path.dirname(__file__), 'models', 'face_detection_yunet_2023mar.onnx')
                 model_path = kwargs.get('model_path', default_yunet_path)
                 self.detector = YuNetDetector(model_path=model_path, device=self.device, crop_size=self.crop_size)
+                self.available = True
+
+            elif self.method == 'yunet_npu':
+                # Set default YuNet NPU model path if not provided
+                default_yunet_npu_path = os.path.join(os.path.dirname(__file__), 'models', 'face_detection_yunet_2023mar.dxnn')
+                model_path = kwargs.get('model_path', default_yunet_npu_path)
+                self.detector = YuNetNPUDetector(model_path=model_path, device='npu', crop_size=self.crop_size)
                 self.available = True
                 
             elif self.method == 'retinaface':

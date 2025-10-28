@@ -64,8 +64,9 @@ class FaceRecognitionGUI:
         self.threshold_var = tk.DoubleVar(value=0.5)
         self.camera_id_var = tk.IntVar(value=0)
 
-        # Model paths
+        # Model paths (will be updated based on device selection)
         self.model_path = 'checkpoints/edgeface_xs_gamma_06.pt'
+        self.model_path_npu = 'checkpoints/edgeface_xs_gamma_06.dxnn'
         self.model_name = 'edgeface_xs_gamma_06'
 
         # Build UI
@@ -96,7 +97,7 @@ class FaceRecognitionGUI:
         # Detector Selection
         ttk.Label(control_frame, text="Face Detector:").grid(row=row, column=0, sticky=tk.W, pady=5)
         detector_combo = ttk.Combobox(control_frame, textvariable=self.detector_var, state='readonly', width=20)
-        detector_combo['values'] = ('mtcnn', 'yunet', 'yolov5_face', 'yolov8')
+        detector_combo['values'] = ('mtcnn', 'yunet', 'yunet_npu', 'yolov5_face', 'yolov8')
         detector_combo.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5)
         detector_combo.bind('<<ComboboxSelected>>', self.on_detector_changed)
         row += 1
@@ -104,7 +105,7 @@ class FaceRecognitionGUI:
         # Device Selection
         ttk.Label(control_frame, text="Device:").grid(row=row, column=0, sticky=tk.W, pady=5)
         device_combo = ttk.Combobox(control_frame, textvariable=self.device_var, state='readonly', width=20)
-        device_combo['values'] = ('cuda', 'cpu')
+        device_combo['values'] = ('cuda', 'cpu', 'npu')
         device_combo.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5)
         device_combo.bind('<<ComboboxSelected>>', self.on_device_changed)
         row += 1
@@ -221,12 +222,33 @@ class FaceRecognitionGUI:
         try:
             self.log_status("🚀 Initializing Face Recognition System...")
 
+            # Determine device and model path
+            device = self.device_var.get()
+            detector = self.detector_var.get()
+
+            # Select appropriate model path
+            if device == 'npu':
+                model_path = self.model_path_npu
+                use_npu = True
+                self.log_status(f"📌 Using NPU model: {model_path}")
+            else:
+                model_path = self.model_path
+                use_npu = False
+                self.log_status(f"📌 Using PyTorch model: {model_path}")
+
+            # Auto-adjust detector if NPU device is selected
+            if device == 'npu' and detector == 'yunet':
+                detector = 'yunet_npu'
+                self.detector_var.set('yunet_npu')
+                self.log_status(f"📌 Auto-switched detector to yunet_npu for NPU")
+
             self.system = FaceRecognitionSystem(
-                detector_method=self.detector_var.get(),
-                edgeface_model_path=self.model_path,
+                detector_method=detector,
+                edgeface_model_path=model_path,
                 edgeface_model_name=self.model_name,
-                device=self.device_var.get(),
-                similarity_threshold=self.threshold_var.get()
+                device=device,
+                similarity_threshold=self.threshold_var.get(),
+                use_npu=use_npu
             )
 
             self.log_status("✅ System initialized successfully")

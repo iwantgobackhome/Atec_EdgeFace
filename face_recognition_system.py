@@ -29,6 +29,14 @@ sys.path.insert(0, 'face_alignment')
 from backbones import get_model
 from face_alignment.unified_detector import UnifiedFaceDetector
 
+# Import NPU recognizer
+try:
+    from edgeface_npu_recognizer import EdgeFaceNPURecognizer
+    NPU_AVAILABLE = True
+except ImportError:
+    NPU_AVAILABLE = False
+    EdgeFaceNPURecognizer = None
+
 
 class FaceAngleCalculator:
     """Calculate face pose angles from landmarks"""
@@ -354,30 +362,47 @@ class FaceRecognitionSystem:
         edgeface_model_path: str = 'checkpoints/edgeface_xs_gamma_06.pt',
         edgeface_model_name: str = 'edgeface_xs_gamma_06',
         device: str = 'cuda',
-        similarity_threshold: float = 0.5
+        similarity_threshold: float = 0.5,
+        use_npu: bool = False
     ):
         """
         Initialize face recognition system
 
         Args:
-            detector_method: Face detection method ('mtcnn', 'yunet', 'yolov5_face', 'yolov8')
-            edgeface_model_path: Path to EdgeFace model
+            detector_method: Face detection method ('mtcnn', 'yunet', 'yunet_npu', 'yolov5_face', 'yolov8')
+            edgeface_model_path: Path to EdgeFace model (.pt for PyTorch, .dxnn for NPU)
             edgeface_model_name: EdgeFace model architecture name
-            device: 'cuda' or 'cpu'
+            device: 'cuda', 'cpu', or 'npu'
             similarity_threshold: Minimum similarity for recognition
+            use_npu: Whether to use NPU for EdgeFace recognition (overrides device setting)
         """
         print("🚀 Initializing Face Recognition System...")
 
-        # Device setup
-        self.device = device if torch.cuda.is_available() else 'cpu'
+        # Determine if we should use NPU
+        self.use_npu = use_npu or device == 'npu'
+
+        # Device setup for detector
+        if self.use_npu:
+            detector_device = 'npu'
+            self.device = 'npu'
+        else:
+            self.device = device if torch.cuda.is_available() else 'cpu'
+            detector_device = self.device
 
         # Initialize face detector
         print(f"📷 Initializing face detector: {detector_method}")
-        self.detector = UnifiedFaceDetector(detector_method, device=self.device)
+        self.detector = UnifiedFaceDetector(detector_method, device=detector_device)
 
-        # Initialize EdgeFace recognizer
+        # Initialize EdgeFace recognizer (NPU or PyTorch)
         print(f"🧠 Initializing EdgeFace recognizer...")
-        self.recognizer = EdgeFaceRecognizer(edgeface_model_path, edgeface_model_name, self.device)
+        if self.use_npu:
+            if not NPU_AVAILABLE:
+                raise ImportError("NPU recognizer not available. Install DeepX NPU SDK.")
+            # Use NPU recognizer
+            self.recognizer = EdgeFaceNPURecognizer(edgeface_model_path, edgeface_model_name, device='npu')
+        else:
+            # Use PyTorch recognizer
+            self.recognizer = EdgeFaceRecognizer(edgeface_model_path, edgeface_model_name, self.device)
 
         # Initialize reference database
         print(f"💾 Initializing reference database...")

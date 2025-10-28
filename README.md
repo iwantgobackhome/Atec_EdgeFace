@@ -26,13 +26,15 @@ EdgeFace 모델을 기반으로 한 얼굴 정렬(Face Alignment) 방법들의 �
   - 유사도 분포 시각화
   - 한국어 설명 포함
 
-#### 실시간 얼굴 인식 시스템
+#### 실시간 얼굴 인식 시스템 (NEW! NPU 지원 🚀)
 - **`face_recognition_gui.py`** - GUI 기반 실시간 얼굴 인식 시스템 (권장)
   - Tkinter 기반 직관적인 GUI 인터페이스
   - 실시간 카메라 피드 및 얼굴 detection/recognition
   - 참조 이미지 추가/삭제 관리
-  - Detection 모델 선택 (MTCNN, YuNet, YOLO 등)
+  - Detection 모델 선택 (MTCNN, YuNet, **YuNet NPU**, YOLO 등)
+  - **DeepX NPU 가속 지원** - CPU/GPU/NPU 선택 가능
   - FPS, 인물 ID, 유사도 실시간 표시
+  - 📖 [NPU 빠른 시작 가이드](QUICKSTART_NPU.md) | [상세 NPU 통합 문서](NPU_INTEGRATION.md)
 
 - **`face_recognition_system.py`** - 커맨드라인 기반 얼굴 인식 시스템
   - EdgeFace 기반 얼굴 임베딩 추출
