@@ -16,6 +16,16 @@ EdgeFace 모델을 기반으로 한 얼굴 정렬(Face Alignment) 방법들의 �
   - 전처리 파이프라인 검증 도구 포함
   - [상세 가이드 보기](npu_calibration/README.md)
 
+#### ONNX 변환 및 평가 (NEW! 🔥)
+- **`edgeface_to_onnx_with_lfw_evaluation.ipynb`** - EdgeFace PyTorch → ONNX 변환 및 LFW 평가
+  - PyTorch 모델을 ONNX 형식으로 변환
+  - NPU calibration config와 일치하는 입력 이름 사용 (input.1)
+  - ONNX 모델 검증 및 출력 비교
+  - LFW 데이터셋으로 PyTorch vs ONNX 성능 비교
+  - ROC 커브, 정확도, EER, 처리 속도 비교 분석
+  - 유사도 분포 시각화
+  - 한국어 설명 포함
+
 #### 실시간 얼굴 인식 시스템
 - **`face_recognition_gui.py`** - GUI 기반 실시간 얼굴 인식 시스템 (권장)
   - Tkinter 기반 직관적인 GUI 인터페이스
@@ -418,6 +428,21 @@ aligned_face = detector.align(image)
 - ✅ **검증 도구**: 전처리 파이프라인 테스트 및 시각화
 - ✅ **완전 자동화 스크립트**: 한 줄 명령어로 전체 파이프라인 실행
 - 📖 [NPU Calibration 가이드](npu_calibration/README.md)
+
+### ONNX 변환 및 평가 (NEW! 🔥)
+- ✅ **EdgeFace PyTorch → ONNX 변환**
+  - ONNX opset 11 사용
+  - NPU calibration config와 일치하는 입력 이름 (input.1)
+  - 동적 배치 크기 지원
+  - 모델 검증 및 출력 비교 (코사인 유사도, 차이 계산)
+- ✅ **LFW 데이터셋 성능 평가**
+  - PyTorch 모델 vs ONNX 모델 비교
+  - ROC AUC, 정확도, EER, 처리 속도 측정
+  - 유사도 분포 비교 시각화
+- ✅ **Jupyter Notebook 형식**
+  - 단계별 상세한 한국어 설명
+  - 인터랙티브 실행 및 시각화
+  - 성능 비교 리포트 자동 생성
 
 ### 실시간 얼굴 인식 시스템
 - ✅ **GUI 기반 사용자 친화적 인터페이스** (Tkinter)
