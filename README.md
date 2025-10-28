@@ -6,7 +6,17 @@ EdgeFace 모델을 기반으로 한 얼굴 정렬(Face Alignment) 방법들의 �
 
 ### 🚀 메인 실행 파일
 
-#### 실시간 얼굴 인식 시스템 (NEW!)
+#### NPU Calibration 시스템 (NEW! 🔥)
+- **`npu_calibration/`** - YuNet/EdgeFace ONNX → NPU 컴파일용 calibration 시스템
+  - **자동화된 고품질 calibration 데이터셋 생성**
+  - **YuNet용**: 일반 이미지 선택 및 품질 분석
+  - **EdgeFace용**: YuNet으로 얼굴 정렬 후 calibration 데이터 생성
+  - **NPU calibration config JSON 자동 생성**
+  - 4가지 calibration 방법 지원 (EMA, MinMax, KL, Percentile)
+  - 전처리 파이프라인 검증 도구 포함
+  - [상세 가이드 보기](npu_calibration/README.md)
+
+#### 실시간 얼굴 인식 시스템
 - **`face_recognition_gui.py`** - GUI 기반 실시간 얼굴 인식 시스템 (권장)
   - Tkinter 기반 직관적인 GUI 인터페이스
   - 실시간 카메라 피드 및 얼굴 detection/recognition
@@ -391,6 +401,23 @@ aligned_face = detector.align(image)
 6. **Memory Usage** - CPU/GPU 메모리 사용량
 
 ## 📝 주요 특징
+
+### NPU Calibration 시스템 (NEW! 🔥)
+- ✅ **ONNX → NPU 컴파일을 위한 완전 자동화된 calibration 시스템**
+- ✅ **YuNet (Detection)**: 일반 이미지로 calibration
+  - 5가지 품질 지표로 자동 이미지 선택 (선명도, 밝기, 대비, 해상도, 색상)
+  - 다양성 보장 샘플링 전략
+- ✅ **EdgeFace (Recognition)**: 정렬된 얼굴로 calibration
+  - YuNet으로 자동 얼굴 detection + alignment
+  - 112x112 정렬된 얼굴 이미지 생성
+  - ArcFace 전처리 파이프라인 적용
+- ✅ **NPU calibration config JSON 자동 생성**
+  - 모델별 최적화된 전처리 설정
+  - BGR/RGB 변환, 정규화 자동 처리
+- ✅ **4가지 calibration 방법**: EMA (권장), MinMax, KL, Percentile
+- ✅ **검증 도구**: 전처리 파이프라인 테스트 및 시각화
+- ✅ **완전 자동화 스크립트**: 한 줄 명령어로 전체 파이프라인 실행
+- 📖 [NPU Calibration 가이드](npu_calibration/README.md)
 
 ### 실시간 얼굴 인식 시스템
 - ✅ **GUI 기반 사용자 친화적 인터페이스** (Tkinter)

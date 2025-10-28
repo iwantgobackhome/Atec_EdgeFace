@@ -1,0 +1,24 @@
+# Calibration 출력 디렉토리
+calibration_output/
+calibration_dataset/
+aligned_faces/
+aligned_faces_calibration/
+edgeface_calibration_output/
+calibration_test_output/
+validation_output/
+
+# 생성된 config 파일 (예제 제외)
+calibration_config_*.json
+!example_config_*.json
+
+# YuNet 모델
+face_detection_yunet_*.onnx
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# 임시 파일
+*.tmp
+.DS_Store

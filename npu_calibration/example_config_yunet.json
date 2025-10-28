@@ -1,0 +1,45 @@
+{
+  "inputs": {
+    "input": [
+      1,
+      3,
+      320,
+      320
+    ]
+  },
+  "calibration_num": 100,
+  "calibration_method": "ema",
+  "default_loader": {
+    "dataset_path": "./calibration_dataset",
+    "file_extensions": [
+      "jpeg",
+      "jpg",
+      "png",
+      "JPEG",
+      "JPG",
+      "PNG"
+    ],
+    "preprocessings": [
+      {
+        "resize": {
+          "width": 320,
+          "height": 320
+        }
+      },
+      {
+        "transpose": {
+          "axis": [
+            2,
+            0,
+            1
+          ]
+        }
+      },
+      {
+        "expandDim": {
+          "axis": 0
+        }
+      }
+    ]
+  }
+}

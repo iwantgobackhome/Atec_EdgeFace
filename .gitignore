@@ -10,3 +10,4 @@ validation_ijbs
 result
 scripts/run_debug*
 .DS_Store
+npu_calibraion/*outputcaptured_references/
