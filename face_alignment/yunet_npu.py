@@ -296,32 +296,32 @@ class YuNetNPUDetector:
             anchor_y = (idx // feat_size) + 0.5
             anchor_x = (idx % feat_size) + 0.5
 
-            # YuNet bbox encoding (NPU outputs are raw offsets without variance encoding)
-            # Format: [cx_offset, cy_offset, w_scale, h_scale]
-            # The NPU model outputs raw predictions, not variance-encoded values
+            # YuNet bbox encoding (NPU outputs)
+            # Testing: bbox values might be more direct scaling
+            # bbox[2], bbox[3] values around 1.3-1.8 suggest they might be direct multipliers
 
-            # Decode center (direct offset from anchor)
-            cx = (anchor_x + bbox[0]) * stride
-            cy = (anchor_y + bbox[1]) * stride
+            # Decode center (smaller offset scaling)
+            cx = (anchor_x + bbox[0] * 0.5) * stride
+            cy = (anchor_y + bbox[1] * 0.5) * stride
 
-            # Decode size (exponential encoding)
-            # Prior box is typically equal to stride for YuNet
-            prior_size = stride * 4  # YuNet default prior
-            w = np.exp(bbox[2]) * prior_size
-            h = np.exp(bbox[3]) * prior_size
+            # Decode size (try linear scaling instead of exponential)
+            # If exp is too aggressive, try direct multiplication with smaller prior
+            prior_size = stride * 2
+            w = bbox[2] * prior_size
+            h = bbox[3] * prior_size
 
             # Convert to top-left corner format
             x = cx - w / 2
             y = cy - h / 2
 
             # Decode landmarks (10 values: 5 points * 2 coordinates)
-            # Landmarks are offset from anchor position, scaled by stride
+            # Landmarks are offset from anchor, with reduced scaling
             lms = landmarks[idx]
             decoded_lms = []
             for i in range(5):
-                # Landmark offsets are relative to anchor, scaled by prior size
-                lm_x = (anchor_x + lms[i*2]) * stride
-                lm_y = (anchor_y + lms[i*2 + 1]) * stride
+                # Apply smaller scaling factor to match bbox center offset
+                lm_x = (anchor_x + lms[i*2] * 0.5) * stride
+                lm_y = (anchor_y + lms[i*2 + 1] * 0.5) * stride
                 decoded_lms.extend([lm_x, lm_y])
 
             # Build detection: [x, y, w, h, x1, y1, ..., x5, y5, confidence]
