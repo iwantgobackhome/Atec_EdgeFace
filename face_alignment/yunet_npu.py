@@ -122,6 +122,11 @@ class YuNetNPUDetector:
         """
         Decode YuNet NPU outputs to face detections
 
+        YuNet outputs 13 tensors from 3 scales (FPN):
+        - Scale 1 (80x80): outputs 1, 3, 10 (landmarks, cls, loc)
+        - Scale 2 (40x40): outputs 6, 8, 12 (landmarks, cls, loc)
+        - Scale 3 (20x20): outputs 7, 9, 11 (landmarks, cls, loc)
+
         Args:
             outputs: List of output tensors from NPU (each may be wrapped in a list)
             scale_x, scale_y: Scale factors for coordinate conversion
@@ -130,10 +135,6 @@ class YuNetNPUDetector:
             faces: List of detected faces [x, y, w, h, x1, y1, ..., x5, y5, confidence]
         """
         faces = []
-
-        # Based on test_npu_inference.py output:
-        # YuNet NPU returns 13 outputs, each wrapped in a list
-        # Need to unwrap and process them
 
         if len(outputs) == 0:
             return faces
@@ -154,147 +155,149 @@ class YuNetNPUDetector:
         for i, out in enumerate(unwrapped_outputs):
             if isinstance(out, np.ndarray):
                 print(f"[DEBUG]   Output {i}: shape={out.shape}, dtype={out.dtype}")
-                if out.size <= 100:  # Print small outputs
-                    print(f"[DEBUG]     Values: {out.flatten()[:20]}")
             else:
                 print(f"[DEBUG]   Output {i}: type={type(out)}")
 
-        # Try using the LAST output as suggested
-        # NPU may append the final detection result at the end
-        if len(unwrapped_outputs) > 0:
-            last_output = unwrapped_outputs[-1]
-            print(f"[DEBUG] Trying LAST output (index {len(unwrapped_outputs)-1}): shape={last_output.shape if isinstance(last_output, np.ndarray) else type(last_output)}")
-
-            if isinstance(last_output, np.ndarray):
-                detection_output = last_output
-            else:
-                detection_output = None
-        else:
-            detection_output = None
-
-        if detection_output is None:
-            print("[WARNING] Last output is not a numpy array")
-            print(f"[DEBUG] Available output shapes: {[out.shape if isinstance(out, np.ndarray) else type(out) for out in unwrapped_outputs]}")
+        if len(unwrapped_outputs) != 13:
+            print(f"[WARNING] Expected 13 outputs, got {len(unwrapped_outputs)}")
             return faces
 
-        # Handle different output shapes
-        output = detection_output
-        original_shape = output.shape
-        print(f"[DEBUG] Original detection output shape: {original_shape}")
+        # Extract outputs for each scale
+        # Based on the debug output pattern:
+        # Output 0: shape=(1, 10, 80, 80) - scale 1 landmarks
+        # Output 1: shape=(1, 6400, 10) - scale 1 landmarks (flattened)
+        # Output 3: shape=(1, 6400, 1) - scale 1 cls scores
+        # Output 10: shape=(1, 6400, 4) - scale 1 bboxes
+        #
+        # Output 6: shape=(1, 1600, 10) - scale 2 landmarks
+        # Output 8: shape=(1, 1600, 1) - scale 2 cls scores
+        # Output 12: shape=(1, 1600, 4) - scale 2 bboxes
+        #
+        # Output 7: shape=(1, 400, 10) - scale 3 landmarks
+        # Output 9: shape=(1, 400, 1) - scale 3 cls scores
+        # Output 11: shape=(1, 400, 4) - scale 3 bboxes
 
-        # Handle 4D shape: (1, 15, 80, 20) or (1, K, H, W)
-        if len(output.shape) == 4:
-            print(f"[DEBUG] 4D output detected, trying to reshape...")
-            # Could be (batch, channels, height, width) where channels=15 is detection data
-            # Try to reshape to (N, 15) where N = H*W
-            batch, channels, height, width = output.shape
+        try:
+            # Process all 3 scales
+            all_detections = []
 
-            if channels == 15:
-                # Transpose to (batch, height, width, channels) then reshape
-                output = np.transpose(output, (0, 2, 3, 1))  # (1, 80, 20, 15)
-                output = output.reshape(-1, 15)  # (80*20, 15) = (1600, 15)
-                print(f"[DEBUG] Reshaped 4D to 2D: {output.shape}")
-            else:
-                # Try the alternative: maybe it's (batch, other_dim, num_detections, values_per_detection)
-                output = output.reshape(-1, original_shape[-1])  # Flatten to (N, K)
-                print(f"[DEBUG] Reshaped 4D (alt) to 2D: {output.shape}")
+            # Scale 1: 80x80 feature map (6400 anchors)
+            cls_1 = unwrapped_outputs[3].squeeze()  # (6400, 1) -> (6400,)
+            loc_1 = unwrapped_outputs[10].squeeze()  # (6400, 4)
+            obj_1 = unwrapped_outputs[1].squeeze()   # (6400, 10)
+            scale_detections = self._process_scale(cls_1, loc_1, obj_1, stride=8, input_size=self.input_size[0])
+            all_detections.extend(scale_detections)
+            print(f"[DEBUG] Scale 1 (80x80): {len(scale_detections)} raw detections")
 
-        elif len(output.shape) == 3:
-            # Shape: (1, N, K) -> squeeze batch dimension
-            output = output.squeeze(0)
-            print(f"[DEBUG] Squeezed 3D to 2D: {output.shape}")
+            # Scale 2: 40x40 feature map (1600 anchors)
+            cls_2 = unwrapped_outputs[8].squeeze()   # (1600, 1) -> (1600,)
+            loc_2 = unwrapped_outputs[12].squeeze()  # (1600, 4)
+            obj_2 = unwrapped_outputs[6].squeeze()   # (1600, 10)
+            scale_detections = self._process_scale(cls_2, loc_2, obj_2, stride=16, input_size=self.input_size[0])
+            all_detections.extend(scale_detections)
+            print(f"[DEBUG] Scale 2 (40x40): {len(scale_detections)} raw detections")
 
-        elif len(output.shape) == 2:
-            # Already 2D, check if we need to transpose
-            if output.shape[0] == 1 and output.shape[1] >= 15:
-                # Shape: (1, K) -> might be single detection
-                print(f"[DEBUG] Detected (1, K) shape, keeping as is")
-            elif output.shape[1] < 15 and output.shape[0] >= 15:
-                # Might need transpose
-                output = output.T
-                print(f"[DEBUG] Transposed 2D: {output.shape}")
+            # Scale 3: 20x20 feature map (400 anchors)
+            cls_3 = unwrapped_outputs[9].squeeze()   # (400, 1) -> (400,)
+            loc_3 = unwrapped_outputs[11].squeeze()  # (400, 4)
+            obj_3 = unwrapped_outputs[7].squeeze()   # (400, 10)
+            scale_detections = self._process_scale(cls_3, loc_3, obj_3, stride=32, input_size=self.input_size[0])
+            all_detections.extend(scale_detections)
+            print(f"[DEBUG] Scale 3 (20x20): {len(scale_detections)} raw detections")
 
-        elif len(output.shape) == 1:
-            # Shape: (K,) -> single detection, reshape to (1, K)
-            if len(output) >= 15:
-                output = output.reshape(1, -1)
-                print(f"[DEBUG] Reshaped 1D to 2D: {output.shape}")
-            else:
-                print(f"[WARNING] 1D output too small: {len(output)}")
-                return faces
+            print(f"[DEBUG] Total detections before NMS: {len(all_detections)}")
 
-        # output should now be (N, K) where N is number of detections, K >= 15
-        if len(output.shape) != 2:
-            print(f"[WARNING] Unexpected YuNet output shape after processing: {output.shape}")
+            # Apply NMS across all scales
+            if len(all_detections) > 0:
+                # Scale coordinates back to original image size
+                for detection in all_detections:
+                    detection[0] *= scale_x  # x
+                    detection[1] *= scale_y  # y
+                    detection[2] *= scale_x  # w
+                    detection[3] *= scale_y  # h
+                    for i in range(4, 14, 2):
+                        detection[i] *= scale_x      # landmark x
+                        detection[i+1] *= scale_y    # landmark y
+
+                faces = self._apply_nms(all_detections, self.nms_threshold)
+                print(f"[DEBUG] Detections after NMS: {len(faces)}")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to decode YuNet outputs: {e}")
+            import traceback
+            traceback.print_exc()
             return faces
-
-        if output.shape[1] < 15:
-            print(f"[WARNING] YuNet output has fewer than 15 values per detection: {output.shape}")
-            print(f"[INFO] Trying to check if detections are in first dimension...")
-            if output.shape[0] >= 15:
-                # Last attempt: transpose
-                output = output.T
-                print(f"[DEBUG] Final transpose attempt: {output.shape}")
-                if output.shape[1] < 15:
-                    return faces
-
-        print(f"[DEBUG] Final output shape: {output.shape}")
-        print(f"[DEBUG] Processing {output.shape[0]} potential detections")
-
-        # Print first few values for debugging
-        if output.shape[0] > 0:
-            print(f"[DEBUG] First detection values (first 15): {output[0, :15]}")
-
-        # Filter detections by confidence threshold
-        for idx, detection in enumerate(output):
-            if len(detection) < 15:
-                continue
-
-            confidence = float(detection[14])
-
-            # Apply confidence threshold
-            if confidence < self.score_threshold:
-                continue
-
-            # Extract coordinates (in input image coordinates: 640x640)
-            x = float(detection[0])
-            y = float(detection[1])
-            w = float(detection[2])
-            h = float(detection[3])
-
-            # Extract landmarks (5 points)
-            landmarks = []
-            for i in range(5):
-                lm_x = float(detection[4 + i * 2])
-                lm_y = float(detection[5 + i * 2])
-                landmarks.extend([lm_x, lm_y])
-
-            # Scale coordinates back to original image size
-            x_scaled = x * scale_x
-            y_scaled = y * scale_y
-            w_scaled = w * scale_x
-            h_scaled = h * scale_y
-
-            landmarks_scaled = []
-            for i in range(0, 10, 2):
-                landmarks_scaled.append(landmarks[i] * scale_x)      # x
-                landmarks_scaled.append(landmarks[i+1] * scale_y)    # y
-
-            # Build face detection result
-            # Format: [x, y, w, h, x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, confidence]
-            face = [x_scaled, y_scaled, w_scaled, h_scaled]
-            face.extend(landmarks_scaled)
-            face.append(confidence)
-
-            faces.append(face)
-
-        print(f"[DEBUG] Found {len(faces)} faces above confidence threshold")
-
-        # Apply NMS (Non-Maximum Suppression) if multiple detections
-        if len(faces) > 1:
-            faces = self._apply_nms(faces, self.nms_threshold)
 
         return faces
+
+    def _process_scale(self, cls_scores, bboxes, landmarks, stride, input_size):
+        """
+        Process detections from a single FPN scale
+
+        Args:
+            cls_scores: Classification scores (N,) or (N, 1)
+            bboxes: Bounding boxes (N, 4) - format depends on YuNet encoding
+            landmarks: Facial landmarks (N, 10)
+            stride: Feature map stride (8, 16, or 32)
+            input_size: Model input size (e.g., 640)
+
+        Returns:
+            List of detections [x, y, w, h, x1, y1, ..., x5, y5, confidence]
+        """
+        detections = []
+
+        # Ensure correct shapes
+        if cls_scores.ndim > 1:
+            cls_scores = cls_scores.flatten()
+        if bboxes.ndim == 3:
+            bboxes = bboxes.squeeze(0)
+        if landmarks.ndim == 3:
+            landmarks = landmarks.squeeze(0)
+
+        # Calculate feature map size
+        feat_size = input_size // stride
+
+        # Filter by confidence threshold
+        valid_mask = cls_scores >= self.score_threshold
+        valid_indices = np.where(valid_mask)[0]
+
+        print(f"[DEBUG]   Stride {stride}: {len(valid_indices)}/{len(cls_scores)} above threshold {self.score_threshold}")
+
+        for idx in valid_indices:
+            confidence = float(cls_scores[idx])
+
+            # Decode bounding box from anchor
+            # YuNet uses center-based encoding
+            bbox = bboxes[idx]
+
+            # Calculate anchor position
+            anchor_y = (idx // feat_size) + 0.5
+            anchor_x = (idx % feat_size) + 0.5
+
+            # Decode bbox (assuming YuNet's encoding scheme)
+            # Format: [cx_offset, cy_offset, w, h] or [x, y, w, h]
+            cx = (anchor_x + bbox[0]) * stride
+            cy = (anchor_y + bbox[1]) * stride
+            w = bbox[2] * stride
+            h = bbox[3] * stride
+
+            # Convert to top-left corner format
+            x = cx - w / 2
+            y = cy - h / 2
+
+            # Decode landmarks (10 values: 5 points * 2 coordinates)
+            lms = landmarks[idx]
+            decoded_lms = []
+            for i in range(5):
+                lm_x = (anchor_x + lms[i*2]) * stride
+                lm_y = (anchor_y + lms[i*2 + 1]) * stride
+                decoded_lms.extend([lm_x, lm_y])
+
+            # Build detection: [x, y, w, h, x1, y1, ..., x5, y5, confidence]
+            detection = [x, y, w, h] + decoded_lms + [confidence]
+            detections.append(detection)
+
+        return detections
 
     def _apply_nms(self, faces, nms_threshold):
         """
