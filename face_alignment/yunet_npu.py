@@ -296,30 +296,30 @@ class YuNetNPUDetector:
             anchor_y = (idx // feat_size) + 0.5
             anchor_x = (idx % feat_size) + 0.5
 
-            # YuNet bbox encoding with variance and prior
-            # Standard YuNet uses variance [0.1, 0.1, 0.2, 0.2]
-            # Format: [cx_offset*var, cy_offset*var, log(w/prior_w)*var, log(h/prior_h)*var]
-            variance = [0.1, 0.1, 0.2, 0.2]
+            # YuNet bbox encoding (NPU outputs are raw offsets without variance encoding)
+            # Format: [cx_offset, cy_offset, w_scale, h_scale]
+            # The NPU model outputs raw predictions, not variance-encoded values
 
-            # Decode center with variance
-            cx = (anchor_x + bbox[0] / variance[0]) * stride
-            cy = (anchor_y + bbox[1] / variance[1]) * stride
+            # Decode center (direct offset from anchor)
+            cx = (anchor_x + bbox[0]) * stride
+            cy = (anchor_y + bbox[1]) * stride
 
-            # Decode size with variance and prior (prior is typically equal to stride)
-            prior_w = stride * 2  # Prior box size (commonly 2x stride)
-            prior_h = stride * 2
-            w = np.exp(bbox[2] / variance[2]) * prior_w
-            h = np.exp(bbox[3] / variance[3]) * prior_h
+            # Decode size (exponential encoding)
+            # Prior box is typically equal to stride for YuNet
+            prior_size = stride * 4  # YuNet default prior
+            w = np.exp(bbox[2]) * prior_size
+            h = np.exp(bbox[3]) * prior_size
 
             # Convert to top-left corner format
             x = cx - w / 2
             y = cy - h / 2
 
             # Decode landmarks (10 values: 5 points * 2 coordinates)
-            # Landmarks are also offset from anchor, not absolute
+            # Landmarks are offset from anchor position, scaled by stride
             lms = landmarks[idx]
             decoded_lms = []
             for i in range(5):
+                # Landmark offsets are relative to anchor, scaled by prior size
                 lm_x = (anchor_x + lms[i*2]) * stride
                 lm_y = (anchor_y + lms[i*2 + 1]) * stride
                 decoded_lms.extend([lm_x, lm_y])
