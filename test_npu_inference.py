@@ -24,7 +24,7 @@ print("=" * 60)
 def test_yunet():
     """Test YuNet face detection"""
     print("\n" + "=" * 60)
-    print("1. Testing YuNet Face Detection")
+    print("2. Testing YuNet Face Detection")
     print("=" * 60)
 
     model_path = "face_alignment/models/face_detection_yunet_2023mar.dxnn"
@@ -128,7 +128,7 @@ def test_yunet():
 def test_edgeface():
     """Test EdgeFace face recognition"""
     print("\n" + "=" * 60)
-    print("2. Testing EdgeFace Face Recognition")
+    print("1. Testing EdgeFace Face Recognition")
     print("=" * 60)
 
     model_path = "checkpoints/edgeface_xs_gamma_06.dxnn"
@@ -243,18 +243,18 @@ def test_edgeface():
 def main():
     """Run all tests"""
 
+    # Test EdgeFace first (known to work)
+    edgeface_success = test_edgeface()
+
     # Test YuNet
     yunet_success = test_yunet()
-
-    # Test EdgeFace
-    edgeface_success = test_edgeface()
 
     # Summary
     print("\n" + "=" * 60)
     print("Test Summary")
     print("=" * 60)
-    print(f"YuNet:    {'✅ PASS' if yunet_success else '❌ FAIL'}")
     print(f"EdgeFace: {'✅ PASS' if edgeface_success else '❌ FAIL'}")
+    print(f"YuNet:    {'✅ PASS' if yunet_success else '❌ FAIL'}")
     print("=" * 60)
 
     if yunet_success and edgeface_success:
