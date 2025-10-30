@@ -148,41 +148,79 @@ class YuNetNPUDetector:
             else:
                 unwrapped_outputs.append(out)
 
-        # YuNet NPU outputs are raw intermediate tensors that need post-processing
-        # For now, we'll try to find detection-like outputs by checking shapes
-        # Looking for outputs with shape (1, N, 15) or similar for detections
+        print(f"[DEBUG] YuNet NPU outputs count: {len(unwrapped_outputs)}")
 
-        # Try to find detection output among the unwrapped outputs
-        detection_output = None
+        # Print ALL output shapes for debugging
         for i, out in enumerate(unwrapped_outputs):
-            if not isinstance(out, np.ndarray):
-                continue
+            if isinstance(out, np.ndarray):
+                print(f"[DEBUG]   Output {i}: shape={out.shape}, dtype={out.dtype}")
+                if out.size <= 100:  # Print small outputs
+                    print(f"[DEBUG]     Values: {out.flatten()[:20]}")
+            else:
+                print(f"[DEBUG]   Output {i}: type={type(out)}")
 
-            shape = out.shape
-            # Look for outputs that might contain detections
-            # Typical detection output: (batch, num_detections, num_values)
-            if len(shape) >= 2:
-                # Check if last dimension could be detection data (15 values for YuNet)
-                if shape[-1] >= 14:  # At least bbox + landmarks + conf
-                    detection_output = out
-                    print(f"[DEBUG] Found potential detection output at index {i}: shape={shape}")
-                    break
+        # Try using the LAST output as suggested
+        # NPU may append the final detection result at the end
+        if len(unwrapped_outputs) > 0:
+            last_output = unwrapped_outputs[-1]
+            print(f"[DEBUG] Trying LAST output (index {len(unwrapped_outputs)-1}): shape={last_output.shape if isinstance(last_output, np.ndarray) else type(last_output)}")
+
+            if isinstance(last_output, np.ndarray):
+                detection_output = last_output
+            else:
+                detection_output = None
+        else:
+            detection_output = None
 
         if detection_output is None:
-            print("[WARNING] Could not find detection output in YuNet NPU outputs")
+            print("[WARNING] Last output is not a numpy array")
             print(f"[DEBUG] Available output shapes: {[out.shape if isinstance(out, np.ndarray) else type(out) for out in unwrapped_outputs]}")
             return faces
 
         # Handle different output shapes
         output = detection_output
-        if len(output.shape) == 3:
+        original_shape = output.shape
+        print(f"[DEBUG] Original detection output shape: {original_shape}")
+
+        # Handle 4D shape: (1, 15, 80, 20) or (1, K, H, W)
+        if len(output.shape) == 4:
+            print(f"[DEBUG] 4D output detected, trying to reshape...")
+            # Could be (batch, channels, height, width) where channels=15 is detection data
+            # Try to reshape to (N, 15) where N = H*W
+            batch, channels, height, width = output.shape
+
+            if channels == 15:
+                # Transpose to (batch, height, width, channels) then reshape
+                output = np.transpose(output, (0, 2, 3, 1))  # (1, 80, 20, 15)
+                output = output.reshape(-1, 15)  # (80*20, 15) = (1600, 15)
+                print(f"[DEBUG] Reshaped 4D to 2D: {output.shape}")
+            else:
+                # Try the alternative: maybe it's (batch, other_dim, num_detections, values_per_detection)
+                output = output.reshape(-1, original_shape[-1])  # Flatten to (N, K)
+                print(f"[DEBUG] Reshaped 4D (alt) to 2D: {output.shape}")
+
+        elif len(output.shape) == 3:
             # Shape: (1, N, K) -> squeeze batch dimension
             output = output.squeeze(0)
+            print(f"[DEBUG] Squeezed 3D to 2D: {output.shape}")
+
+        elif len(output.shape) == 2:
+            # Already 2D, check if we need to transpose
+            if output.shape[0] == 1 and output.shape[1] >= 15:
+                # Shape: (1, K) -> might be single detection
+                print(f"[DEBUG] Detected (1, K) shape, keeping as is")
+            elif output.shape[1] < 15 and output.shape[0] >= 15:
+                # Might need transpose
+                output = output.T
+                print(f"[DEBUG] Transposed 2D: {output.shape}")
+
         elif len(output.shape) == 1:
             # Shape: (K,) -> single detection, reshape to (1, K)
             if len(output) >= 15:
                 output = output.reshape(1, -1)
+                print(f"[DEBUG] Reshaped 1D to 2D: {output.shape}")
             else:
+                print(f"[WARNING] 1D output too small: {len(output)}")
                 return faces
 
         # output should now be (N, K) where N is number of detections, K >= 15
@@ -192,9 +230,20 @@ class YuNetNPUDetector:
 
         if output.shape[1] < 15:
             print(f"[WARNING] YuNet output has fewer than 15 values per detection: {output.shape}")
-            return faces
+            print(f"[INFO] Trying to check if detections are in first dimension...")
+            if output.shape[0] >= 15:
+                # Last attempt: transpose
+                output = output.T
+                print(f"[DEBUG] Final transpose attempt: {output.shape}")
+                if output.shape[1] < 15:
+                    return faces
 
+        print(f"[DEBUG] Final output shape: {output.shape}")
         print(f"[DEBUG] Processing {output.shape[0]} potential detections")
+
+        # Print first few values for debugging
+        if output.shape[0] > 0:
+            print(f"[DEBUG] First detection values (first 15): {output[0, :15]}")
 
         # Filter detections by confidence threshold
         for idx, detection in enumerate(output):
