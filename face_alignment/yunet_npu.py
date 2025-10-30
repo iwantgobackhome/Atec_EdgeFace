@@ -300,14 +300,15 @@ class YuNetNPUDetector:
             # Bbox offsets are relative to anchor position
             # Width/height use linear scaling with prior size
 
-            # Decode center with offset scaling
-            cx = (anchor_x + bbox[0] * 0.5) * stride
-            cy = (anchor_y + bbox[1] * 0.5) * stride
+            # Decode center with direct offset (no scaling)
+            cx = (anchor_x + bbox[0] * 1.0) * stride
+            cy = (anchor_y + bbox[1] * 1.0) * stride
 
-            # Decode size with linear scaling
-            prior_size = stride * 3
-            w = bbox[2] * prior_size
-            h = bbox[3] * prior_size
+            # Decode size with aspect ratio (face is typically taller than wide)
+            prior_w = stride * 3
+            prior_h = stride * 3.6  # 1:1.2 aspect ratio for faces
+            w = bbox[2] * prior_w
+            h = bbox[3] * prior_h
 
             # Convert to top-left corner format
             x = cx - w / 2
