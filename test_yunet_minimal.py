@@ -58,10 +58,23 @@ print(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
 # Run inference
 print("\n🚀 Running inference...")
 try:
-    outputs = ie.run(input_tensor)
+    ie.run(input_tensor)
     print(f"✅ Inference completed!")
 except Exception as e:
     print(f"❌ Inference failed: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+
+# Get outputs
+print("\n📥 Getting outputs...")
+try:
+    outputs = ie.get_outputs()
+    print(f"✅ Got outputs!")
+except Exception as e:
+    print(f"❌ Failed to get outputs: {e}")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 
 # Just print basic info
