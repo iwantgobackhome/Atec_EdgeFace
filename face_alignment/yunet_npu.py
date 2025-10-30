@@ -74,7 +74,7 @@ class YuNetNPUDetector:
         self.input_size = (320, 320)
 
         # Detection thresholds
-        self.score_threshold = 0.8
+        self.score_threshold = 0.6
         self.nms_threshold = 0.3
 
         # Initialize DeepX NPU Inference Engine
@@ -282,33 +282,33 @@ class YuNetNPUDetector:
         print(f"[DEBUG]   Stride {stride}: {len(valid_indices)}/{len(cls_scores)} above threshold {self.score_threshold}")
         print(f"[DEBUG]     cls_scores - min: {cls_scores.min():.4f}, max: {cls_scores.max():.4f}, mean: {cls_scores.mean():.4f}")
         if len(valid_indices) > 0:
-            print(f"[DEBUG]     First 5 valid scores: {cls_scores[valid_indices[:5]]}")
-            print(f"[DEBUG]     First 5 valid bboxes: {bboxes[valid_indices[0]]}")
-            print(f"[DEBUG]     First 5 valid landmarks: {landmarks[valid_indices[0]]}")
+            print(f"[DEBUG]     First valid score: {cls_scores[valid_indices[0]]}")
+            print(f"[DEBUG]     First valid bbox raw: {bboxes[valid_indices[0]]}")
+            print(f"[DEBUG]     First valid landmark raw: {landmarks[valid_indices[0]]}")
 
         for idx in valid_indices:
             confidence = float(cls_scores[idx])
 
             # Decode bounding box from anchor
-            # YuNet uses center-based encoding
             bbox = bboxes[idx]
 
-            # Calculate anchor position
+            # Calculate anchor position (grid center)
             anchor_y = (idx // feat_size) + 0.5
             anchor_x = (idx % feat_size) + 0.5
 
-            # Decode bbox (assuming YuNet's encoding scheme)
-            # Format: [cx_offset, cy_offset, w, h] or [x, y, w, h]
+            # YuNet bbox encoding: [cx_offset, cy_offset, log(w), log(h)]
+            # The w, h are encoded as exp(bbox[2]), exp(bbox[3])
             cx = (anchor_x + bbox[0]) * stride
             cy = (anchor_y + bbox[1]) * stride
-            w = bbox[2] * stride
-            h = bbox[3] * stride
+            w = np.exp(bbox[2]) * stride
+            h = np.exp(bbox[3]) * stride
 
             # Convert to top-left corner format
             x = cx - w / 2
             y = cy - h / 2
 
             # Decode landmarks (10 values: 5 points * 2 coordinates)
+            # Landmarks are also offset from anchor, not absolute
             lms = landmarks[idx]
             decoded_lms = []
             for i in range(5):
