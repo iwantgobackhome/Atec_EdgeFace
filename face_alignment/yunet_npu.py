@@ -292,21 +292,20 @@ class YuNetNPUDetector:
             # Decode bounding box from anchor
             bbox = bboxes[idx]
 
-            # Calculate anchor position (grid center)
-            anchor_y = (idx // feat_size) + 0.5
-            anchor_x = (idx % feat_size) + 0.5
+            # Calculate anchor position (grid top-left corner, no 0.5 offset)
+            anchor_y = (idx // feat_size)
+            anchor_x = (idx % feat_size)
 
-            # YuNet bbox encoding (NPU outputs)
-            # Testing: bbox values might be more direct scaling
-            # bbox[2], bbox[3] values around 1.3-1.8 suggest they might be direct multipliers
+            # YuNet bbox encoding for NPU outputs
+            # Bbox offsets are relative to anchor position
+            # Width/height use linear scaling with prior size
 
-            # Decode center (smaller offset scaling)
+            # Decode center with offset scaling
             cx = (anchor_x + bbox[0] * 0.5) * stride
             cy = (anchor_y + bbox[1] * 0.5) * stride
 
-            # Decode size (try linear scaling instead of exponential)
-            # If exp is too aggressive, try direct multiplication with smaller prior
-            prior_size = stride * 2
+            # Decode size with linear scaling
+            prior_size = stride * 3
             w = bbox[2] * prior_size
             h = bbox[3] * prior_size
 
@@ -315,13 +314,12 @@ class YuNetNPUDetector:
             y = cy - h / 2
 
             # Decode landmarks (10 values: 5 points * 2 coordinates)
-            # Landmarks are offset from anchor, with reduced scaling
+            # Landmarks use same anchor-based offset as bbox center
             lms = landmarks[idx]
             decoded_lms = []
             for i in range(5):
-                # Apply smaller scaling factor to match bbox center offset
-                lm_x = (anchor_x + lms[i*2] * 0.5) * stride
-                lm_y = (anchor_y + lms[i*2 + 1] * 0.5) * stride
+                lm_x = (anchor_x + lms[i*2] * 1) * stride
+                lm_y = (anchor_y + lms[i*2 + 1] * 1) * stride
                 decoded_lms.extend([lm_x, lm_y])
 
             # Build detection: [x, y, w, h, x1, y1, ..., x5, y5, confidence]
