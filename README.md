@@ -36,6 +36,22 @@ EdgeFace 모델을 기반으로 한 얼굴 정렬(Face Alignment) 방법들의 �
   - FPS, 인물 ID, 유사도 실시간 표시
   - 📖 [NPU 빠른 시작 가이드](QUICKSTART_NPU.md) | [상세 NPU 통합 문서](NPU_INTEGRATION.md)
 
+#### NPU 통합 모듈 (NEW! 🚀)
+- **`face_alignment/yunet_npu.py`** - YuNet NPU 얼굴 검출기
+  - DeepX NPU SDK 기반 YuNet detector
+  - 320x320 입력, 5-point 랜드마크 검출
+  - ⚠️ 현재 출력 디코딩 문제로 디버깅 중
+
+- **`edgeface_npu_recognizer.py`** - EdgeFace NPU 인식기
+  - DeepX NPU SDK 기반 EdgeFace recognizer
+  - 112x112 입력, 512차원 임베딩 출력
+  - ✅ L2 정규화된 임베딩 출력 확인 완료
+
+- **`test_npu_inference.py`** - NPU 모델 통합 테스트
+  - YuNet과 EdgeFace NPU 모델 동시 테스트
+  - 출력 shape, 통계, L2 norm 분석
+  - 임베디드 보드에서 실행 권장
+
 - **`face_recognition_system.py`** - 커맨드라인 기반 얼굴 인식 시스템
   - EdgeFace 기반 얼굴 임베딩 추출
   - 코사인 유사도 기반 얼굴 검증
@@ -73,6 +89,12 @@ EdgeFace 모델을 기반으로 한 얼굴 정렬(Face Alignment) 방법들의 �
   - OpenCV DNN 기반
   - CUDA 자동 fallback 지원
   - 빠른 속도
+
+- **`yunet_npu.py`** - YuNet NPU detector (NEW! 🚀)
+  - DeepX NPU SDK 기반
+  - 임베디드 보드 최적화
+  - 320x320 입력, 5-point 랜드마크
+  - ⚠️ 출력 디코딩 개발 중
 
 - **`yolo_detector.py`** - YOLO 기반 detectors
   - YOLOv5-Face: 얼굴 특화 ONNX 모델
@@ -262,9 +284,19 @@ python face_recognition_gui.py
 **📖 GUI 사용법**:
 
 1. **시스템 설정**
-   - **Detector 선택**: MTCNN, YuNet, YOLO 등 선택 (YOLOv8 권장)
-   - **Device 선택**: CUDA (GPU) 또는 CPU
+   - **Detector 선택**: MTCNN, YuNet, **YuNet NPU**, YOLO 등 선택
+     - YOLOv8 권장 (GPU)
+     - YuNet NPU 권장 (임베디드 보드)
+   - **Device 선택**:
+     - **CUDA (GPU)** - PC/워크스테이션
+     - **CPU** - GPU 없는 환경
+     - **NPU** - DeepX NPU 탑재 임베디드 보드 (🚀 최적화)
    - **Similarity Threshold 설정**: 인식 임계값 조정 (0.0~1.0, 기본: 0.5)
+
+   **💡 NPU 사용 시**:
+   - Device를 "NPU"로 선택하면 자동으로 YuNet NPU로 전환
+   - EdgeFace도 자동으로 NPU 모델 사용 (.dxnn 파일)
+   - 📖 [NPU 빠른 시작](QUICKSTART_NPU.md) | [NPU 통합 문서](NPU_INTEGRATION.md)
 
 2. **카메라 시작**
    - "▶ Start Camera" 버튼 클릭
@@ -363,7 +395,25 @@ python face_recognition_system.py \
 - **우선순위 매칭**: 추적된 얼굴은 threshold 0.8배로 낮춰 안정성 향상
 - **다각도 DB**: 5가지 각도 저장으로 다양한 포즈에서 높은 인식률
 
-### 7. LFW 벤치마크 실행
+### 7. NPU 모델 테스트 (임베디드 보드)
+
+DeepX NPU 탑재 임베디드 보드에서 NPU 모델을 테스트할 수 있습니다.
+
+```bash
+# NPU 통합 테스트 (EdgeFace + YuNet)
+python test_npu_inference.py
+```
+
+**테스트 내용**:
+- EdgeFace NPU: 512차원 임베딩 출력 검증
+- YuNet NPU: 얼굴 검출 출력 형식 분석
+- 각 모델의 출력 shape, 통계, L2 norm 확인
+
+**현재 상태**:
+- ✅ EdgeFace NPU: 정상 동작 확인 (L2 norm = 1.0)
+- ⚠️ YuNet NPU: 출력 디코딩 문제로 디버깅 중
+
+### 8. LFW 벤치마크 실행
 
 ```bash
 python face_alignment_benchmark_gpu.py
@@ -376,7 +426,7 @@ python face_alignment_benchmark_gpu.py
 - `LFW_CONFIG['batch_size']` - GPU 메모리에 맞게 조정
 - `LFW_CONFIG['num_workers']` - CPU 코어 수에 맞게 조정
 
-### 8. 특정 Detector 사용하기 (Python API)
+### 9. 특정 Detector 사용하기 (Python API)
 
 ```python
 from face_alignment.unified_detector import UnifiedFaceDetector
@@ -395,7 +445,8 @@ aligned_face = detector.align(image)
 
 **사용 가능한 methods**:
 - `mtcnn` - MTCNN
-- `yunet` - YuNet
+- `yunet` - YuNet (OpenCV DNN)
+- `yunet_npu` - YuNet NPU (DeepX NPU) ⚠️ 디버깅 중
 - `yolov5_face` - YOLOv5-Face
 - `yolov8` - YOLOv8
 - `retinaface` - RetinaFace (ONNX)
