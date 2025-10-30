@@ -296,12 +296,20 @@ class YuNetNPUDetector:
             anchor_y = (idx // feat_size) + 0.5
             anchor_x = (idx % feat_size) + 0.5
 
-            # YuNet bbox encoding: [cx_offset, cy_offset, log(w), log(h)]
-            # The w, h are encoded as exp(bbox[2]), exp(bbox[3])
-            cx = (anchor_x + bbox[0]) * stride
-            cy = (anchor_y + bbox[1]) * stride
-            w = np.exp(bbox[2]) * stride
-            h = np.exp(bbox[3]) * stride
+            # YuNet bbox encoding with variance and prior
+            # Standard YuNet uses variance [0.1, 0.1, 0.2, 0.2]
+            # Format: [cx_offset*var, cy_offset*var, log(w/prior_w)*var, log(h/prior_h)*var]
+            variance = [0.1, 0.1, 0.2, 0.2]
+
+            # Decode center with variance
+            cx = (anchor_x + bbox[0] / variance[0]) * stride
+            cy = (anchor_y + bbox[1] / variance[1]) * stride
+
+            # Decode size with variance and prior (prior is typically equal to stride)
+            prior_w = stride * 2  # Prior box size (commonly 2x stride)
+            prior_h = stride * 2
+            w = np.exp(bbox[2] / variance[2]) * prior_w
+            h = np.exp(bbox[3] / variance[3]) * prior_h
 
             # Convert to top-left corner format
             x = cx - w / 2
