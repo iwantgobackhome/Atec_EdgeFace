@@ -154,7 +154,7 @@ class YuNetNPUDetector:
         # Print ALL output shapes for debugging
         for i, out in enumerate(unwrapped_outputs):
             if isinstance(out, np.ndarray):
-                print(f"[DEBUG]   Output {i}: shape={out.shape}, dtype={out.dtype}")
+                print(f"[DEBUG]   Output {i}: shape={out.shape}, dtype={out.dtype}, min={out.min():.4f}, max={out.max():.4f}, mean={out.mean():.4f}")
             else:
                 print(f"[DEBUG]   Output {i}: type={type(out)}")
 
@@ -262,6 +262,11 @@ class YuNetNPUDetector:
         valid_indices = np.where(valid_mask)[0]
 
         print(f"[DEBUG]   Stride {stride}: {len(valid_indices)}/{len(cls_scores)} above threshold {self.score_threshold}")
+        print(f"[DEBUG]     cls_scores - min: {cls_scores.min():.4f}, max: {cls_scores.max():.4f}, mean: {cls_scores.mean():.4f}")
+        if len(valid_indices) > 0:
+            print(f"[DEBUG]     First 5 valid scores: {cls_scores[valid_indices[:5]]}")
+            print(f"[DEBUG]     First 5 valid bboxes: {bboxes[valid_indices[0]]}")
+            print(f"[DEBUG]     First 5 valid landmarks: {landmarks[valid_indices[0]]}")
 
         for idx in valid_indices:
             confidence = float(cls_scores[idx])
