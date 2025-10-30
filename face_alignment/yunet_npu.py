@@ -100,20 +100,17 @@ class YuNetNPUDetector:
         """
         orig_h, orig_w = cv_image.shape[:2]
 
-        # Resize to input size (320x320)
+        # Resize to input size (640x640 as per test_npu_inference.py)
+        # Updated from 320x320 to match actual model input
+        self.input_size = (640, 640)
         resized = cv.resize(cv_image, self.input_size)
 
-        # Convert BGR to RGB (as per calibration config)
-        # Note: YuNet calibration config expects RGB input
+        # Convert BGR to RGB (as per test_npu_inference.py)
         rgb_image = cv.cvtColor(resized, cv.COLOR_BGR2RGB)
 
-        # Transpose to CHW format (as per calibration config)
-        # Shape: (H, W, C) -> (C, H, W)
-        chw_image = np.transpose(rgb_image, (2, 0, 1))
-
-        # Add batch dimension: (C, H, W) -> (1, C, H, W)
-        # Note: dx_engine expects this format
-        input_tensor = np.expand_dims(chw_image, axis=0)
+        # YuNet expects HWC format, not CHW! (as per test_npu_inference.py)
+        # Add batch dimension: (H, W, C) -> (1, H, W, C)
+        input_tensor = np.expand_dims(rgb_image, axis=0)
 
         # Calculate scale factors for coordinate conversion
         scale_x = orig_w / self.input_size[0]
@@ -126,7 +123,7 @@ class YuNetNPUDetector:
         Decode YuNet NPU outputs to face detections
 
         Args:
-            outputs: List of output tensors from NPU
+            outputs: List of output tensors from NPU (each may be wrapped in a list)
             scale_x, scale_y: Scale factors for coordinate conversion
 
         Returns:
@@ -134,38 +131,73 @@ class YuNetNPUDetector:
         """
         faces = []
 
-        # YuNet typically outputs a single tensor with shape (N, 15) or (1, N, 15)
-        # where N is the number of detections
-        # Each detection: [x, y, w, h, x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, conf]
+        # Based on test_npu_inference.py output:
+        # YuNet NPU returns 13 outputs, each wrapped in a list
+        # Need to unwrap and process them
 
         if len(outputs) == 0:
             return faces
 
-        # Get the main output tensor
-        output = outputs[0]
+        # Unwrap list wrappers from all outputs
+        unwrapped_outputs = []
+        for out in outputs:
+            if isinstance(out, list) and len(out) > 0:
+                unwrapped_outputs.append(out[0] if isinstance(out[0], np.ndarray) else out)
+            elif isinstance(out, np.ndarray):
+                unwrapped_outputs.append(out)
+            else:
+                unwrapped_outputs.append(out)
+
+        # YuNet NPU outputs are raw intermediate tensors that need post-processing
+        # For now, we'll try to find detection-like outputs by checking shapes
+        # Looking for outputs with shape (1, N, 15) or similar for detections
+
+        # Try to find detection output among the unwrapped outputs
+        detection_output = None
+        for i, out in enumerate(unwrapped_outputs):
+            if not isinstance(out, np.ndarray):
+                continue
+
+            shape = out.shape
+            # Look for outputs that might contain detections
+            # Typical detection output: (batch, num_detections, num_values)
+            if len(shape) >= 2:
+                # Check if last dimension could be detection data (15 values for YuNet)
+                if shape[-1] >= 14:  # At least bbox + landmarks + conf
+                    detection_output = out
+                    print(f"[DEBUG] Found potential detection output at index {i}: shape={shape}")
+                    break
+
+        if detection_output is None:
+            print("[WARNING] Could not find detection output in YuNet NPU outputs")
+            print(f"[DEBUG] Available output shapes: {[out.shape if isinstance(out, np.ndarray) else type(out) for out in unwrapped_outputs]}")
+            return faces
 
         # Handle different output shapes
+        output = detection_output
         if len(output.shape) == 3:
-            # Shape: (1, N, 15) -> squeeze to (N, 15)
+            # Shape: (1, N, K) -> squeeze batch dimension
             output = output.squeeze(0)
         elif len(output.shape) == 1:
-            # Shape: (15,) -> single detection, reshape to (1, 15)
+            # Shape: (K,) -> single detection, reshape to (1, K)
             if len(output) >= 15:
                 output = output.reshape(1, -1)
             else:
                 return faces
 
-        # output should now be (N, 15) where N is number of detections
+        # output should now be (N, K) where N is number of detections, K >= 15
         if len(output.shape) != 2:
-            print(f"[WARNING] Unexpected YuNet output shape: {output.shape}")
+            print(f"[WARNING] Unexpected YuNet output shape after processing: {output.shape}")
             return faces
 
         if output.shape[1] < 15:
             print(f"[WARNING] YuNet output has fewer than 15 values per detection: {output.shape}")
             return faces
 
+        print(f"[DEBUG] Processing {output.shape[0]} potential detections")
+
         # Filter detections by confidence threshold
-        for detection in output:
+        for idx, detection in enumerate(output):
             if len(detection) < 15:
                 continue
 
@@ -175,7 +207,7 @@ class YuNetNPUDetector:
             if confidence < self.score_threshold:
                 continue
 
-            # Extract coordinates (already in input image coordinates: 320x320)
+            # Extract coordinates (in input image coordinates: 640x640)
             x = float(detection[0])
             y = float(detection[1])
             w = float(detection[2])
@@ -206,6 +238,8 @@ class YuNetNPUDetector:
             face.append(confidence)
 
             faces.append(face)
+
+        print(f"[DEBUG] Found {len(faces)} faces above confidence threshold")
 
         # Apply NMS (Non-Maximum Suppression) if multiple detections
         if len(faces) > 1:
@@ -290,11 +324,17 @@ class YuNetNPUDetector:
         # Preprocess image
         input_tensor, scale_x, scale_y = self._preprocess_image(cv_image)
 
-        # Run inference on NPU
+        # Make input contiguous to avoid NPU warning
+        input_tensor = np.ascontiguousarray(input_tensor)
+
+        # Run inference on NPU using run() + get_all_task_outputs() pattern
         try:
-            outputs = self.inference_engine.Run(input_tensor)
+            self.inference_engine.run(input_tensor)
+            outputs = self.inference_engine.get_all_task_outputs()
         except Exception as e:
             print(f"YuNet NPU inference error: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
         # Decode outputs to face detections

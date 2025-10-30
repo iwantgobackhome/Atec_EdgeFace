@@ -200,13 +200,13 @@ class UnifiedFaceDetector:
                 except Exception as e:
                     print(f"MTCNN detect_faces error: {e}")
                     return np.array([]), np.array([])
-            elif self.method == 'yunet':
-                # YuNet returns faces array, convert to bboxes and landmarks
+            elif self.method == 'yunet' or self.method == 'yunet_npu':
+                # YuNet and YuNet NPU return faces array, convert to bboxes and landmarks
                 try:
                     faces = self.detector.detect_faces(image)
                     if faces is None or len(faces) == 0:
                         return np.array([]), np.array([])
-                    
+
                     # Convert YuNet format to unified format
                     bboxes = []
                     landmarks = []
@@ -214,20 +214,22 @@ class UnifiedFaceDetector:
                         # face format: [x, y, w, h, x1, y1, x2, y2, x3, y3, x4, y4, x5, y5, confidence]
                         if len(face) < 15:  # Skip invalid faces
                             continue
-                            
+
                         x, y, w, h = face[0], face[1], face[2], face[3]
                         conf = face[14] if len(face) > 14 else 0.9
                         bboxes.append([x, y, x+w, y+h, conf])
-                        
+
                         # Extract landmarks (5 points)
                         lmks = []
                         for i in range(5):
                             lmks.extend([face[4 + i*2], face[5 + i*2]])
                         landmarks.append(lmks)
-                    
+
                     return np.array(bboxes), np.array(landmarks)
                 except Exception as e:
                     print(f"YuNet detect_faces error: {e}")
+                    import traceback
+                    traceback.print_exc()
                     return np.array([]), np.array([])
             else:
                 return self.detector.detect_faces(image)

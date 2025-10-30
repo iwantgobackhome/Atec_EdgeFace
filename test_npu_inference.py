@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Test both YuNet and EdgeFace NPU inference
-YuNet과 EdgeFace NPU 추론 통합 테스트
-"""
-
 import sys
 import cv2
 import numpy as np
@@ -62,11 +56,11 @@ def test_yunet():
     img = cv2.imread(test_image_path)
     print(f"Image shape: {img.shape}")
 
-    # Preprocess (320x320, RGB, CHW, batch)
-    resized = cv2.resize(img, (320, 320))
+    # Preprocess (640x640, RGB, HWC, batch)
+    resized = cv2.resize(img, (640, 640))
     rgb_img = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-    chw_img = np.transpose(rgb_img, (2, 0, 1))
-    input_tensor = np.expand_dims(chw_img, axis=0).astype(np.uint8)
+    # chw_img = np.transpose(rgb_img, (2, 0, 1))
+    input_tensor = np.expand_dims(rgb_img, axis=0).astype(np.uint8)
 
     # Make contiguous to avoid warning
     input_tensor = np.ascontiguousarray(input_tensor)
@@ -92,7 +86,7 @@ def test_yunet():
     # Get outputs
     print("\n📥 Getting outputs...")
     try:
-        outputs = ie.get_outputs()
+        outputs = ie.get_all_task_outputs()
         print(f"✅ Got outputs!")
     except Exception as e:
         print(f"❌ Failed to get outputs: {e}")
@@ -100,27 +94,79 @@ def test_yunet():
         traceback.print_exc()
         return False
 
-    # Print output info
-    print(f"\n📊 Number of outputs: {len(outputs)}")
-    print("\nOutput shapes:")
+# Print output info
+    print(f"\nNumber of outputs: {len(outputs)}")
+    print("\nOutput Details:")
     print("-" * 60)
 
     try:
         for i in range(len(outputs)):
             out = outputs[i]
-            print(f"Output {i}: shape = {out.shape}, dtype = {out.dtype}")
-            if out.size <= 20:
-                print(f"  Values: {out.flatten()}")
-            else:
+            print(f"--- Output {i} ---")
+            print(f"  Type: {type(out)}")
+
+            # 1. If the output is a standard NumPy array
+            if isinstance(out, np.ndarray):
+                print(f"  Shape: {out.shape}")
+                print(f"  Dtype: {out.dtype}")
                 flat = out.flatten()
-                print(f"  Min/Max: [{flat.min():.4f}, {flat.max():.4f}]")
-                print(f"  Mean/Std: {flat.mean():.4f} / {flat.std():.4f}")
+
+                # Special check for EdgeFace 512-d embedding
+                if flat.size == 512:
+                    l2_norm = np.linalg.norm(flat)
+                    print(f"  L2 norm (Embedding?): {l2_norm:.4f}")
+
+                if flat.size <= 20:
+                    print(f"  Values: {flat}")
+                else:
+                    print(f"  Min/Max: [{flat.min():.4f}, {flat.max():.4f}]")
+
+            # 2. If the output is a list (common from NPU)
+            elif isinstance(out, list):
+                print(f"  List Length: {len(out)}")
+                if len(out) == 0:
+                    print("  List is empty.")
+                    continue
+
+                print(f"  Type of first element: {type(out[0])}")
+
+                # Check if this is a list of *one* tensor (common wrapper pattern)
+                if len(out) == 1 and isinstance(out[0], np.ndarray):
+                    out_tensor = out[0]
+                    print(f"  Unwrapped Tensor Shape: {out_tensor.shape}")
+                    print(f"  Unwrapped Tensor Dtype: {out_tensor.dtype}")
+                    flat = out_tensor.flatten()
+
+                    # Special check for EdgeFace 512-d embedding
+                    if flat.size == 512:
+                        l2_norm = np.linalg.norm(flat)
+                        print(f"  L2 norm (Embedding?): {l2_norm:.4f}")
+
+                    if flat.size <= 20:
+                        print(f"  Unwrapped Values: {flat}")
+                    else:
+                        print(f"  Unwrapped Min/Max: [{flat.min():.4f}, {flat.max():.4f}]")
+                else:
+                    # It's a complex list (like YuNet's Output 0)
+                    print_limit = min(len(out), 5)
+                    print(f"  Inspecting first {print_limit} list elements:")
+                    for j in range(print_limit):
+                        list_element = out[j]
+                        if isinstance(list_element, np.ndarray):
+                            # Print shape, not the full array
+                            print(f"    Element {j} [np.ndarray]: shape={list_element.shape}, dtype={list_element.dtype}")
+                        else:
+                            print(f"    Element {j} [{type(list_element)}]: {list_element}")
+
+            # 3. For any other data type
+            else:
+                print(f"  Value: {out}")
+
     except Exception as e:
-        print(f"Error printing shapes: {e}")
+        print(f"Error printing output details: {e}")
         import traceback
         traceback.print_exc()
         return False
-
     print("\n✅ YuNet test completed")
     return True
 
@@ -200,7 +246,7 @@ def test_edgeface():
     # Get outputs
     print("\n📥 Getting outputs...")
     try:
-        outputs = ie.get_outputs()
+        outputs = ie.get_all_task_outputs()
         print(f"✅ Got outputs!")
     except Exception as e:
         print(f"❌ Failed to get outputs: {e}")
@@ -208,34 +254,79 @@ def test_edgeface():
         traceback.print_exc()
         return False
 
-    # Print output info
-    print(f"\n📊 Number of outputs: {len(outputs)}")
-    print("\nOutput shapes:")
+# Print output info
+    print(f"\nNumber of outputs: {len(outputs)}")
+    print("\nOutput Details:")
     print("-" * 60)
 
     try:
         for i in range(len(outputs)):
             out = outputs[i]
-            print(f"Output {i}: shape = {out.shape}, dtype = {out.dtype}")
+            print(f"--- Output {i} ---")
+            print(f"  Type: {type(out)}")
 
-            flat = out.flatten()
-            print(f"  Flattened shape: {flat.shape}")
-            print(f"  Min/Max: [{flat.min():.4f}, {flat.max():.4f}]")
-            print(f"  Mean/Std: {flat.mean():.4f} / {flat.std():.4f}")
+            # 1. If the output is a standard NumPy array
+            if isinstance(out, np.ndarray):
+                print(f"  Shape: {out.shape}")
+                print(f"  Dtype: {out.dtype}")
+                flat = out.flatten()
 
-            # Check L2 norm
-            l2_norm = np.linalg.norm(flat)
-            print(f"  L2 norm: {l2_norm:.4f}")
+                # Special check for EdgeFace 512-d embedding
+                if flat.size == 512:
+                    l2_norm = np.linalg.norm(flat)
+                    print(f"  L2 norm (Embedding?): {l2_norm:.4f}")
 
-            if len(flat) == 512:
-                print(f"  ✅ This is the 512-d embedding!")
-                print(f"  First 10 values: {flat[:10]}")
+                if flat.size <= 20:
+                    print(f"  Values: {flat}")
+                else:
+                    print(f"  Min/Max: [{flat.min():.4f}, {flat.max():.4f}]")
+
+            # 2. If the output is a list (common from NPU)
+            elif isinstance(out, list):
+                print(f"  List Length: {len(out)}")
+                if len(out) == 0:
+                    print("  List is empty.")
+                    continue
+
+                print(f"  Type of first element: {type(out[0])}")
+
+                # Check if this is a list of *one* tensor (common wrapper pattern)
+                if len(out) == 1 and isinstance(out[0], np.ndarray):
+                    out_tensor = out[0]
+                    print(f"  Unwrapped Tensor Shape: {out_tensor.shape}")
+                    print(f"  Unwrapped Tensor Dtype: {out_tensor.dtype}")
+                    flat = out_tensor.flatten()
+
+                    # Special check for EdgeFace 512-d embedding
+                    if flat.size == 512:
+                        l2_norm = np.linalg.norm(flat)
+                        print(f"  L2 norm (Embedding?): {l2_norm:.4f}")
+
+                    if flat.size <= 20:
+                        print(f"  Unwrapped Values: {flat}")
+                    else:
+                        print(f"  Unwrapped Min/Max: [{flat.min():.4f}, {flat.max():.4f}]")
+                else:
+                    # It's a complex list (like YuNet's Output 0)
+                    print_limit = min(len(out), 5)
+                    print(f"  Inspecting first {print_limit} list elements:")
+                    for j in range(print_limit):
+                        list_element = out[j]
+                        if isinstance(list_element, np.ndarray):
+                            # Print shape, not the full array
+                            print(f"    Element {j} [np.ndarray]: shape={list_element.shape}, dtype={list_element.dtype}")
+                        else:
+                            print(f"    Element {j} [{type(list_element)}]: {list_element}")
+
+            # 3. For any other data type
+            else:
+                print(f"  Value: {out}")
+
     except Exception as e:
-        print(f"Error printing shapes: {e}")
+        print(f"Error printing output details: {e}")
         import traceback
         traceback.print_exc()
         return False
-
     print("\n✅ EdgeFace test completed")
     return True
 

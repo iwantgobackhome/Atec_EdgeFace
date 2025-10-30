@@ -96,16 +96,42 @@ class EdgeFaceNPURecognizer:
         # Preprocess
         input_tensor = self._preprocess_image(face_img)
 
+        # Make input contiguous to avoid NPU warning
+        input_tensor = np.ascontiguousarray(input_tensor)
+
         # Run inference on NPU
         try:
-            outputs = self.inference_engine.Run(input_tensor)
+            # Use run() + get_all_task_outputs() pattern as per test_npu_inference.py
+            self.inference_engine.run(input_tensor)
+            outputs = self.inference_engine.get_all_task_outputs()
         except Exception as e:
             print(f"EdgeFace NPU inference error: {e}")
             raise
 
         # Extract embedding from output
-        # outputs[0] should be the embedding vector
-        embedding = outputs[0].flatten()
+        # Based on test output: Output 1 is list with first element being (1, 512) tensor
+        # outputs[1] is the embedding output (Output 1 from test)
+        if len(outputs) < 2:
+            raise RuntimeError(f"EdgeFace NPU: Expected at least 2 outputs, got {len(outputs)}")
+
+        embedding_output = outputs[1]
+
+        # Handle list wrapper: unwrap if it's a list with one element
+        if isinstance(embedding_output, list):
+            if len(embedding_output) == 0:
+                raise RuntimeError("EdgeFace NPU: Embedding output list is empty")
+            embedding_output = embedding_output[0]
+
+        # Now embedding_output should be a numpy array with shape (1, 512)
+        if not isinstance(embedding_output, np.ndarray):
+            raise RuntimeError(f"EdgeFace NPU: Expected numpy array, got {type(embedding_output)}")
+
+        # Flatten to 1D vector
+        embedding = embedding_output.flatten()
+
+        # Verify size
+        if embedding.size != 512:
+            raise RuntimeError(f"EdgeFace NPU: Expected 512-d embedding, got {embedding.size}-d")
 
         # L2 normalize
         embedding = embedding / np.linalg.norm(embedding)
