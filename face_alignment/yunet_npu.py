@@ -162,48 +162,66 @@ class YuNetNPUDetector:
             print(f"[WARNING] Expected 13 outputs, got {len(unwrapped_outputs)}")
             return faces
 
-        # Extract outputs for each scale
-        # Based on the debug output pattern:
-        # Output 0: shape=(1, 10, 80, 80) - scale 1 landmarks
-        # Output 1: shape=(1, 6400, 10) - scale 1 landmarks (flattened)
-        # Output 3: shape=(1, 6400, 1) - scale 1 cls scores
-        # Output 10: shape=(1, 6400, 4) - scale 1 bboxes
+        # Extract outputs for each scale based on ONNX model structure
+        # ONNX outputs: cls_8, cls_16, cls_32, obj_8, obj_16, obj_32, bbox_8, bbox_16, bbox_32, kps_8, kps_16, kps_32
         #
-        # Output 6: shape=(1, 1600, 10) - scale 2 landmarks
-        # Output 8: shape=(1, 1600, 1) - scale 2 cls scores
-        # Output 12: shape=(1, 1600, 4) - scale 2 bboxes
+        # NPU outputs (from debug):
+        # Output 0: (1, 10, 80, 80) - kps_8 (spatial format)
+        # Output 1: (1, 6400, 10) - kps_8 (flattened) ✓
+        # Output 2: (1, 400, 1) - cls_32 ✓
+        # Output 3: (1, 6400, 1) - obj_8 ✓ (high values 0.43-0.91 = objectness)
+        # Output 4: (1, 1600, 1) - cls_16 ✓
+        # Output 5: (1, 6400, 1) - cls_8 ✓ (all zeros = no face detected)
+        # Output 6: (1, 1600, 10) - kps_16 ✓
+        # Output 7: (1, 400, 10) - kps_32 ✓
+        # Output 8: (1, 1600, 1) - obj_16 ✓ (all zeros)
+        # Output 9: (1, 400, 1) - obj_32 ✓ (very low 0-0.005)
+        # Output 10: (1, 6400, 4) - bbox_8 ✓
+        # Output 11: (1, 400, 4) - bbox_32 ✓
+        # Output 12: (1, 1600, 4) - bbox_16 ✓
         #
-        # Output 7: shape=(1, 400, 10) - scale 3 landmarks
-        # Output 9: shape=(1, 400, 1) - scale 3 cls scores
-        # Output 11: shape=(1, 400, 4) - scale 3 bboxes
+        # Final confidence = cls * obj
 
         try:
             # Process all 3 scales
             all_detections = []
 
-            # Scale 1: 80x80 feature map (6400 anchors)
-            cls_1 = unwrapped_outputs[3].squeeze()  # (6400, 1) -> (6400,)
-            loc_1 = unwrapped_outputs[10].squeeze()  # (6400, 4)
-            obj_1 = unwrapped_outputs[1].squeeze()   # (6400, 10)
-            scale_detections = self._process_scale(cls_1, loc_1, obj_1, stride=8, input_size=self.input_size[0])
-            all_detections.extend(scale_detections)
-            print(f"[DEBUG] Scale 1 (80x80): {len(scale_detections)} raw detections")
+            # Scale 1: stride 8 (80x80 feature map, 6400 anchors)
+            cls_8 = unwrapped_outputs[5].squeeze()    # (6400,)
+            obj_8 = unwrapped_outputs[3].squeeze()    # (6400,)
+            bbox_8 = unwrapped_outputs[10].squeeze()  # (6400, 4)
+            kps_8 = unwrapped_outputs[1].squeeze()    # (6400, 10)
 
-            # Scale 2: 40x40 feature map (1600 anchors)
-            cls_2 = unwrapped_outputs[8].squeeze()   # (1600, 1) -> (1600,)
-            loc_2 = unwrapped_outputs[12].squeeze()  # (1600, 4)
-            obj_2 = unwrapped_outputs[6].squeeze()   # (1600, 10)
-            scale_detections = self._process_scale(cls_2, loc_2, obj_2, stride=16, input_size=self.input_size[0])
+            # Combine cls and obj scores
+            score_8 = cls_8 * obj_8
+            print(f"[DEBUG] Scale 1 (stride 8): score range [{score_8.min():.6f}, {score_8.max():.6f}], mean={score_8.mean():.6f}")
+            scale_detections = self._process_scale(score_8, bbox_8, kps_8, stride=8, input_size=self.input_size[0])
             all_detections.extend(scale_detections)
-            print(f"[DEBUG] Scale 2 (40x40): {len(scale_detections)} raw detections")
+            print(f"[DEBUG] Scale 1: {len(scale_detections)} raw detections")
 
-            # Scale 3: 20x20 feature map (400 anchors)
-            cls_3 = unwrapped_outputs[9].squeeze()   # (400, 1) -> (400,)
-            loc_3 = unwrapped_outputs[11].squeeze()  # (400, 4)
-            obj_3 = unwrapped_outputs[7].squeeze()   # (400, 10)
-            scale_detections = self._process_scale(cls_3, loc_3, obj_3, stride=32, input_size=self.input_size[0])
+            # Scale 2: stride 16 (40x40 feature map, 1600 anchors)
+            cls_16 = unwrapped_outputs[4].squeeze()   # (1600,)
+            obj_16 = unwrapped_outputs[8].squeeze()   # (1600,)
+            bbox_16 = unwrapped_outputs[12].squeeze() # (1600, 4)
+            kps_16 = unwrapped_outputs[6].squeeze()   # (1600, 10)
+
+            score_16 = cls_16 * obj_16
+            print(f"[DEBUG] Scale 2 (stride 16): score range [{score_16.min():.6f}, {score_16.max():.6f}], mean={score_16.mean():.6f}")
+            scale_detections = self._process_scale(score_16, bbox_16, kps_16, stride=16, input_size=self.input_size[0])
             all_detections.extend(scale_detections)
-            print(f"[DEBUG] Scale 3 (20x20): {len(scale_detections)} raw detections")
+            print(f"[DEBUG] Scale 2: {len(scale_detections)} raw detections")
+
+            # Scale 3: stride 32 (20x20 feature map, 400 anchors)
+            cls_32 = unwrapped_outputs[2].squeeze()   # (400,)
+            obj_32 = unwrapped_outputs[9].squeeze()   # (400,)
+            bbox_32 = unwrapped_outputs[11].squeeze() # (400, 4)
+            kps_32 = unwrapped_outputs[7].squeeze()   # (400, 10)
+
+            score_32 = cls_32 * obj_32
+            print(f"[DEBUG] Scale 3 (stride 32): score range [{score_32.min():.6f}, {score_32.max():.6f}], mean={score_32.mean():.6f}")
+            scale_detections = self._process_scale(score_32, bbox_32, kps_32, stride=32, input_size=self.input_size[0])
+            all_detections.extend(scale_detections)
+            print(f"[DEBUG] Scale 3: {len(scale_detections)} raw detections")
 
             print(f"[DEBUG] Total detections before NMS: {len(all_detections)}")
 
