@@ -165,20 +165,20 @@ class YuNetNPUDetector:
         # Extract outputs for each scale based on ONNX model structure
         # ONNX outputs: cls_8, cls_16, cls_32, obj_8, obj_16, obj_32, bbox_8, bbox_16, bbox_32, kps_8, kps_16, kps_32
         #
-        # NPU outputs (from debug):
-        # Output 0: (1, 10, 80, 80) - kps_8 (spatial format)
-        # Output 1: (1, 6400, 10) - kps_8 (flattened) ✓
-        # Output 2: (1, 400, 1) - cls_32 ✓
-        # Output 3: (1, 6400, 1) - obj_8 ✓ (high values 0.43-0.91 = objectness)
-        # Output 4: (1, 1600, 1) - cls_16 ✓
-        # Output 5: (1, 6400, 1) - cls_8 ✓ (all zeros = no face detected)
-        # Output 6: (1, 1600, 10) - kps_16 ✓
-        # Output 7: (1, 400, 10) - kps_32 ✓
-        # Output 8: (1, 1600, 1) - obj_16 ✓ (all zeros)
-        # Output 9: (1, 400, 1) - obj_32 ✓ (very low 0-0.005)
-        # Output 10: (1, 6400, 4) - bbox_8 ✓
-        # Output 11: (1, 400, 4) - bbox_32 ✓
-        # Output 12: (1, 1600, 4) - bbox_16 ✓
+        # NPU outputs (your compiled version):
+        # Output 0: (1, 1, 80, 80) - spatial feature map (unused)
+        # Output 1: (1, 6400, 1) - cls_8 (0-0.207)
+        # Output 2: (1, 1600, 1) - cls_16 (0-0.0027, very low)
+        # Output 3: (1, 6400, 4) - bbox_8
+        # Output 4: (1, 1600, 4) - bbox_16
+        # Output 5: (1, 1600, 1) - obj_16 (0.37-0.63)
+        # Output 6: (1, 400, 10) - kps_32
+        # Output 7: (1, 6400, 10) - kps_8
+        # Output 8: (1, 1600, 10) - kps_16
+        # Output 9: (1, 400, 1) - obj_32 (0.37-0.72)
+        # Output 10: (1, 400, 4) - bbox_32
+        # Output 11: (1, 6400, 1) - obj_8 (0.38-0.89, objectness)
+        # Output 12: (1, 400, 1) - cls_32 (0-0.92)
         #
         # Final confidence = cls * obj
 
@@ -187,10 +187,10 @@ class YuNetNPUDetector:
             all_detections = []
 
             # Scale 1: stride 8 (80x80 feature map, 6400 anchors)
-            cls_8 = unwrapped_outputs[5].squeeze()    # (6400,)
-            obj_8 = unwrapped_outputs[3].squeeze()    # (6400,)
-            bbox_8 = unwrapped_outputs[10].squeeze()  # (6400, 4)
-            kps_8 = unwrapped_outputs[1].squeeze()    # (6400, 10)
+            cls_8 = unwrapped_outputs[1].squeeze()    # (6400, 1) -> (6400,)
+            obj_8 = unwrapped_outputs[11].squeeze()   # (6400, 1) -> (6400,)
+            bbox_8 = unwrapped_outputs[3].squeeze()   # (6400, 4)
+            kps_8 = unwrapped_outputs[7].squeeze()    # (6400, 10)
 
             # Combine cls and obj scores
             score_8 = cls_8 * obj_8
@@ -200,10 +200,10 @@ class YuNetNPUDetector:
             print(f"[DEBUG] Scale 1: {len(scale_detections)} raw detections")
 
             # Scale 2: stride 16 (40x40 feature map, 1600 anchors)
-            cls_16 = unwrapped_outputs[4].squeeze()   # (1600,)
-            obj_16 = unwrapped_outputs[8].squeeze()   # (1600,)
-            bbox_16 = unwrapped_outputs[12].squeeze() # (1600, 4)
-            kps_16 = unwrapped_outputs[6].squeeze()   # (1600, 10)
+            cls_16 = unwrapped_outputs[2].squeeze()   # (1600, 1) -> (1600,)
+            obj_16 = unwrapped_outputs[5].squeeze()   # (1600, 1) -> (1600,)
+            bbox_16 = unwrapped_outputs[4].squeeze()  # (1600, 4)
+            kps_16 = unwrapped_outputs[8].squeeze()   # (1600, 10)
 
             score_16 = cls_16 * obj_16
             print(f"[DEBUG] Scale 2 (stride 16): score range [{score_16.min():.6f}, {score_16.max():.6f}], mean={score_16.mean():.6f}")
@@ -212,10 +212,10 @@ class YuNetNPUDetector:
             print(f"[DEBUG] Scale 2: {len(scale_detections)} raw detections")
 
             # Scale 3: stride 32 (20x20 feature map, 400 anchors)
-            cls_32 = unwrapped_outputs[2].squeeze()   # (400,)
-            obj_32 = unwrapped_outputs[9].squeeze()   # (400,)
-            bbox_32 = unwrapped_outputs[11].squeeze() # (400, 4)
-            kps_32 = unwrapped_outputs[7].squeeze()   # (400, 10)
+            cls_32 = unwrapped_outputs[12].squeeze()  # (400, 1) -> (400,)
+            obj_32 = unwrapped_outputs[9].squeeze()   # (400, 1) -> (400,)
+            bbox_32 = unwrapped_outputs[10].squeeze() # (400, 4)
+            kps_32 = unwrapped_outputs[6].squeeze()   # (400, 10)
 
             score_32 = cls_32 * obj_32
             print(f"[DEBUG] Scale 3 (stride 32): score range [{score_32.min():.6f}, {score_32.max():.6f}], mean={score_32.mean():.6f}")
