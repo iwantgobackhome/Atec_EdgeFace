@@ -10,7 +10,7 @@ DeepX NPU를 사용하여 YuNet 얼굴 검출과 EdgeFace 얼굴 인식을 가�
 
 1. **YuNet Face Detector** (NPU)
    - 모델 파일: `face_alignment/models/face_detection_yunet_2023mar.dxnn`
-   - 입력 크기: 320x320
+   - 입력 크기: 640x640
    - 기능: 얼굴 검출 및 랜드마크 추출 (5-point landmarks)
 
 2. **EdgeFace Recognizer** (NPU)
@@ -124,10 +124,10 @@ python test_npu_models.py
 **파일:** `face_alignment/yunet_npu.py`
 
 **전처리:**
-1. 이미지를 320x320으로 리사이즈
+1. 이미지를 640x640으로 리사이즈
 2. BGR → RGB 변환
 3. HWC → CHW 전치
-4. 배치 차원 추가 (1, 3, 320, 320)
+4. 배치 차원 추가 (1, 3, 640, 640)
 5. uint8 타입으로 변환
 
 **후처리:**
@@ -208,12 +208,12 @@ Testing YuNet NPU Model
 ============================================================
 Loading model: face_alignment/models/face_detection_yunet_2023mar.dxnn
 ✅ Model loaded successfully
-📊 Input size: [1, 3, 320, 320]
+📊 Input size: [1, 3, 640, 640]
 📊 Output dtype: ['FLOAT32']
 
 Loading test image: test.jpg
 Image shape: (480, 640, 3)
-Input tensor shape: (1, 3, 320, 320), dtype: uint8
+Input tensor shape: (1, 3, 640, 640), dtype: uint8
 
 🚀 Running inference...
 
@@ -314,6 +314,191 @@ calibration config 파일은 `npu_calibration/` 디렉토리를 참조하세요.
 - Python 예제: `npu_calibration/deepX_document/07_Python_Examples.md`
 - YuNet calibration config: `npu_calibration/calibration_output/calibration_config_yunet.json`
 - EdgeFace calibration config: `npu_calibration/edgeface_calibration_output/calibration_config_edgeface.json`
+
+## 🔧 YuNet NPU 상세 가이드
+
+### YuNet NPU 출력 구조
+
+YuNet ONNX 모델을 DeepX NPU로 컴파일하면 **출력 구조가 변경**됩니다:
+
+#### 원본 ONNX 모델 출력 (12개)
+- Feature Pyramid Network (FPN) 기반 3-scale detection
+- 각 scale당 4가지 출력: cls, obj, bbox, kps
+- 출력 이름: `cls_8`, `cls_16`, `cls_32`, `obj_8`, `obj_16`, `obj_32`, `bbox_8`, `bbox_16`, `bbox_32`, `kps_8`, `kps_16`, `kps_32`
+- **Post-processing 포함**: NMS, bbox decoding 등이 ONNX 모델 내부에 구현됨
+
+#### NPU 컴파일된 모델 출력 (13개)
+- DeepX NPU 컴파일러가 **출력 순서를 재배열**
+- **Post-processing 제거**: NMS, bbox decoding이 제거되어 raw feature map 출력
+- 13개 텐서 출력 (spatial feature map 1개 + FPN outputs 12개)
+
+```python
+# NPU 출력 매핑 예시 (user's compiled version)
+Output 0:  (1, 1, 80, 80)    # Spatial feature map (unused)
+Output 1:  (1, 6400, 1)      # cls_8 (stride 8, 80x80 = 6400 anchors)
+Output 2:  (1, 1600, 1)      # cls_16 (stride 16, 40x40 = 1600 anchors)
+Output 3:  (1, 6400, 4)      # bbox_8
+Output 4:  (1, 1600, 4)      # bbox_16
+Output 5:  (1, 1600, 1)      # obj_16
+Output 6:  (1, 400, 10)      # kps_32 (stride 32, 20x20 = 400 anchors)
+Output 7:  (1, 6400, 10)     # kps_8
+Output 8:  (1, 1600, 10)     # kps_16
+Output 9:  (1, 400, 1)       # obj_32
+Output 10: (1, 400, 4)       # bbox_32
+Output 11: (1, 6400, 1)      # obj_8
+Output 12: (1, 400, 1)       # cls_32
+```
+
+**⚠️ 중요**: NPU 컴파일러 버전이나 설정에 따라 출력 순서가 달라질 수 있습니다!
+
+### YuNet NPU 디코딩 구현
+
+NPU 모델의 raw 출력을 bbox/landmark로 변환하는 과정:
+
+#### 1. Score 계산
+```python
+# YuNet은 cls × obj를 final confidence로 사용
+score = cls_score * obj_score
+```
+
+#### 2. Anchor 기반 Bbox 디코딩
+```python
+# Anchor 위치 계산 (grid 좌상단 기준, 0.5 offset 없음)
+feat_size = input_size // stride  # 640/32 = 20 for stride 32
+anchor_y = idx // feat_size
+anchor_x = idx % feat_size
+
+# Center 디코딩 (offset scaling)
+cx = (anchor_x + bbox[0] * 0.5) * stride
+cy = (anchor_y + bbox[1] * 0.5) * stride
+
+# Size 디코딩 (linear scaling with prior)
+prior_size = stride * 3  # 또는 stride * 4
+w = bbox[2] * prior_size
+h = bbox[3] * prior_size
+
+# Top-left corner 형식으로 변환
+x = cx - w / 2
+y = cy - h / 2
+```
+
+#### 3. Landmark 디코딩
+```python
+# Landmarks도 anchor 기준 offset
+for i in range(5):  # 5 keypoints
+    lm_x = (anchor_x + lms[i*2] * 1.0) * stride
+    lm_y = (anchor_y + lms[i*2 + 1] * 1.0) * stride
+```
+
+#### 4. Multi-scale Detection
+```python
+# 3개 scale의 detection을 모두 수집
+detections_stride8 = process_scale(..., stride=8)   # 80x80 feature map
+detections_stride16 = process_scale(..., stride=16) # 40x40 feature map
+detections_stride32 = process_scale(..., stride=32) # 20x20 feature map
+
+# 모든 detection 합치기
+all_detections = detections_stride8 + detections_stride16 + detections_stride32
+```
+
+#### 5. NMS (Non-Maximum Suppression)
+```python
+# 중복 detection 제거
+final_detections = apply_nms(all_detections, iou_threshold=0.3)
+```
+
+### Bbox/Landmark 조정 방법
+
+Detection 결과가 정확하지 않을 때 조정하는 방법:
+
+#### 파일 위치
+`face_alignment/yunet_npu.py`의 `_process_scale()` 메서드 (라인 ~295-325)
+
+#### 조정 파라미터
+
+1. **Bbox 크기 조정** (`prior_size`)
+   ```python
+   prior_size = stride * 3  # 이 값을 조정
+   # 크게: stride * 4, stride * 5
+   # 작게: stride * 2, stride * 1.5
+   ```
+
+2. **Bbox width/height 비율 조정**
+   ```python
+   # 정사각형이 아닌 얼굴 비율 적용
+   prior_w = stride * 3    # width
+   prior_h = stride * 4    # height (더 길게)
+   w = bbox[2] * prior_w
+   h = bbox[3] * prior_h
+   ```
+
+3. **Bbox center offset 조정**
+   ```python
+   # 위치 shift 조정 (현재 0.5)
+   cx = (anchor_x + bbox[0] * 0.5) * stride  # 0.5를 0.3~1.0 사이로 조정
+   cy = (anchor_y + bbox[1] * 0.5) * stride
+
+   # 우하단으로 치우치면: 계수를 줄임 (0.3, 0.4)
+   # 좌상단으로 치우치면: 계수를 늘림 (0.7, 0.8)
+   ```
+
+4. **Landmark offset 조정**
+   ```python
+   # 현재 1.0 계수 사용
+   lm_x = (anchor_x + lms[i*2] * 1.0) * stride  # 1.0을 조정
+   lm_y = (anchor_y + lms[i*2 + 1] * 1.0) * stride
+
+   # Landmark가 bbox center와 함께 움직이지 않으면 bbox center 기준으로:
+   lm_x = cx + lms[i*2] * w  # bbox 크기 기준
+   lm_y = cy + lms[i*2 + 1] * h
+   ```
+
+5. **Anchor 0.5 offset**
+   ```python
+   # 현재: anchor는 grid 좌상단 (0.5 offset 없음)
+   anchor_y = (idx // feat_size)
+   anchor_x = (idx % feat_size)
+
+   # Grid center를 사용하려면:
+   anchor_y = (idx // feat_size) + 0.5
+   anchor_x = (idx % feat_size) + 0.5
+   ```
+
+#### Debug 출력 활용
+
+코드 실행 시 다음과 같은 debug 정보가 출력됩니다:
+
+```
+[DEBUG] Scale 3 (stride 32): score range [0.000000, 0.810580], mean=0.015924
+[DEBUG]   Stride 32: 7/400 above threshold 0.6
+[DEBUG]     First valid score: 0.7965272068977356
+[DEBUG]     First valid bbox raw: [0.9806061 1.3796387 1.3396912 1.7766724]
+[DEBUG]     First valid landmark raw: [-0.03892517  0.46404266  1.4368286 ...]
+```
+
+이 값들을 보면서:
+- `bbox raw` 값이 크면 (>2.0) → offset scaling 줄이기
+- `bbox[2]`, `bbox[3]` (width/height scale) → 1.0~2.0 사이면 linear, >3.0이면 exponential 고려
+- Landmark 값의 범위 → bbox와 비슷한 스케일이면 같은 방식 적용
+
+### NPU 컴파일 시 추가 주의사항
+
+1. **출력 순서 확인 필수**
+   - 다른 버전으로 컴파일하면 출력 순서가 다를 수 있음
+   - `test_npu_inference.py` 실행해서 shape 확인
+   - `_decode_outputs()` 메서드에서 output 매핑 수정
+
+2. **Post-processing 제거됨**
+   - ONNX 모델의 NMS, bbox decoding이 제거됨
+   - Python에서 직접 구현 필요
+
+3. **Calibration 데이터 중요**
+   - YuNet은 다양한 얼굴 크기/각도 이미지로 calibration
+   - `npu_calibration/` 시스템 활용 권장
+
+4. **입력 전처리**
+   - YuNet: RGB, HWC format, uint8
+   - 640x640 입력 크기
 
 ## 라이선스
 

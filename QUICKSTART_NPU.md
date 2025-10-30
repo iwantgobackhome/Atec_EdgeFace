@@ -88,7 +88,7 @@ ls -l /dev/video*
 Testing YuNet NPU Model
 ============================================================
 ✅ Model loaded successfully
-📊 Input size: [1, 3, 320, 320]
+📊 Input size: [1, 3, 640, 640]
 ✅ Decoded 3 faces
 
 Testing EdgeFace NPU Model
