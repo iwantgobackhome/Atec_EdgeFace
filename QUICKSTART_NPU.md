@@ -109,17 +109,17 @@ Testing EdgeFace NPU Model
 ## 📚 추가 문서
 
 - [전체 통합 가이드](NPU_INTEGRATION.md) - 상세 설명 및 구조
-- [DeepX 문서](npu_calibration/deepX_document/) - NPU SDK 공식 문서
+- [DeepX 문서](https://github.com/DEEPX-AI/dx-all-suite.git) - NPU SDK 공식 문서
 - [calibration 설정](npu_calibration/) - 모델 변환 참고
 
 ## ⚡ 성능 팁
 
 ### CPU vs NPU 비교
-
+Raspberry Pi 5 기준
 | 모드 | 예상 FPS | 전력 소비 |
 |------|----------|-----------|
-| CPU  | ~10-15   | 높음      |
-| NPU  | ~40-60   | 낮음      |
+| CPU  | ~4-5   | 높음      |
+| NPU  | ~10-13   | 낮음      |
 
 ### 최적화 방법
 

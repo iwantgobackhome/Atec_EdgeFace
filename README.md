@@ -243,14 +243,7 @@ pip install -r requirements.txt
 - `scikit-learn` - 평가 메트릭
 - `tqdm`, `psutil` - 진행 표시 및 메모리 모니터링
 
-### 4. 선택적 패키지 설치
-
-```bash
-# MediaPipe detector를 사용하려는 경우
-pip install mediapipe
-```
-
-### 5. LFW 데이터셋 및 모델 준비
+### 4. LFW 데이터셋 및 모델 준비
 
 벤치마크 실행 전에 필요한 파일들을 준비하세요:
 
@@ -258,7 +251,7 @@ pip install mediapipe
 2. **EdgeFace 모델**: `checkpoints/edgeface_xs_gamma_06.pt`
 3. **Face detection 모델들**: `face_alignment/models/` 디렉토리
 
-### 6. LFW 벤치마크 실행
+### 5. LFW 벤치마크 실행
 
 ```bash
 python face_alignment_benchmark_gpu.py
@@ -450,10 +443,8 @@ aligned_face = detector.align(image)
 - `yunet_npu` - YuNet NPU (DeepX NPU) ✅ 사용 가능
 - `yolov5_face` - YOLOv5-Face
 - `yolov8` - YOLOv8
-- `retinaface` - RetinaFace (ONNX)
-- `rtmpose` - RTMPose (ONNX)
-- `mediapipe` - MediaPipe Face Mesh
-- `mediapipe_simple` - MediaPipe Face Detection
+- `retinaface` - RetinaFace (ONNX) - 수정 중
+- `rtmpose` - RTMPose (ONNX) - 수정 중
 
 ## 📈 벤치마크 메트릭
 
