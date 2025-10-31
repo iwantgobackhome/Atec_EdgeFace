@@ -149,14 +149,8 @@ class YuNetNPUDetector:
             else:
                 unwrapped_outputs.append(out)
 
-        print(f"[DEBUG] YuNet NPU outputs count: {len(unwrapped_outputs)}")
-
-        # Print ALL output shapes for debugging
-        for i, out in enumerate(unwrapped_outputs):
-            if isinstance(out, np.ndarray):
-                print(f"[DEBUG]   Output {i}: shape={out.shape}, dtype={out.dtype}, min={out.min():.4f}, max={out.max():.4f}, mean={out.mean():.4f}")
-            else:
-                print(f"[DEBUG]   Output {i}: type={type(out)}")
+        # Debug output count (disabled for performance)
+        # print(f"[DEBUG] YuNet NPU outputs count: {len(unwrapped_outputs)}")
 
         if len(unwrapped_outputs) != 13:
             print(f"[WARNING] Expected 13 outputs, got {len(unwrapped_outputs)}")
@@ -194,10 +188,8 @@ class YuNetNPUDetector:
 
             # Combine cls and obj scores
             score_8 = cls_8 * obj_8
-            print(f"[DEBUG] Scale 1 (stride 8): score range [{score_8.min():.6f}, {score_8.max():.6f}], mean={score_8.mean():.6f}")
             scale_detections = self._process_scale(score_8, bbox_8, kps_8, stride=8, input_size=self.input_size[0])
             all_detections.extend(scale_detections)
-            print(f"[DEBUG] Scale 1: {len(scale_detections)} raw detections")
 
             # Scale 2: stride 16 (40x40 feature map, 1600 anchors)
             cls_16 = unwrapped_outputs[2].squeeze()   # (1600, 1) -> (1600,)
@@ -206,10 +198,8 @@ class YuNetNPUDetector:
             kps_16 = unwrapped_outputs[8].squeeze()   # (1600, 10)
 
             score_16 = cls_16 * obj_16
-            print(f"[DEBUG] Scale 2 (stride 16): score range [{score_16.min():.6f}, {score_16.max():.6f}], mean={score_16.mean():.6f}")
             scale_detections = self._process_scale(score_16, bbox_16, kps_16, stride=16, input_size=self.input_size[0])
             all_detections.extend(scale_detections)
-            print(f"[DEBUG] Scale 2: {len(scale_detections)} raw detections")
 
             # Scale 3: stride 32 (20x20 feature map, 400 anchors)
             cls_32 = unwrapped_outputs[12].squeeze()  # (400, 1) -> (400,)
@@ -218,12 +208,8 @@ class YuNetNPUDetector:
             kps_32 = unwrapped_outputs[6].squeeze()   # (400, 10)
 
             score_32 = cls_32 * obj_32
-            print(f"[DEBUG] Scale 3 (stride 32): score range [{score_32.min():.6f}, {score_32.max():.6f}], mean={score_32.mean():.6f}")
             scale_detections = self._process_scale(score_32, bbox_32, kps_32, stride=32, input_size=self.input_size[0])
             all_detections.extend(scale_detections)
-            print(f"[DEBUG] Scale 3: {len(scale_detections)} raw detections")
-
-            print(f"[DEBUG] Total detections before NMS: {len(all_detections)}")
 
             # Apply NMS across all scales
             if len(all_detections) > 0:
@@ -238,7 +224,6 @@ class YuNetNPUDetector:
                         detection[i+1] *= scale_y    # landmark y
 
                 faces = self._apply_nms(all_detections, self.nms_threshold)
-                print(f"[DEBUG] Detections after NMS: {len(faces)}")
 
         except Exception as e:
             print(f"[ERROR] Failed to decode YuNet outputs: {e}")
@@ -278,13 +263,6 @@ class YuNetNPUDetector:
         # Filter by confidence threshold
         valid_mask = cls_scores >= self.score_threshold
         valid_indices = np.where(valid_mask)[0]
-
-        print(f"[DEBUG]   Stride {stride}: {len(valid_indices)}/{len(cls_scores)} above threshold {self.score_threshold}")
-        print(f"[DEBUG]     cls_scores - min: {cls_scores.min():.4f}, max: {cls_scores.max():.4f}, mean: {cls_scores.mean():.4f}")
-        if len(valid_indices) > 0:
-            print(f"[DEBUG]     First valid score: {cls_scores[valid_indices[0]]}")
-            print(f"[DEBUG]     First valid bbox raw: {bboxes[valid_indices[0]]}")
-            print(f"[DEBUG]     First valid landmark raw: {landmarks[valid_indices[0]]}")
 
         for idx in valid_indices:
             confidence = float(cls_scores[idx])
