@@ -74,7 +74,9 @@ class YuNetNPUDetector:
         self.input_size = (320, 320)
 
         # Detection thresholds
-        self.score_threshold = 0.6
+        # Lower threshold for NPU due to quantization effects
+        # NPU quantization reduces confidence scores, especially for distant/small faces
+        self.score_threshold = 0.3  # Reduced from 0.6 to improve distant face detection
         self.nms_threshold = 0.3
 
         # Initialize DeepX NPU Inference Engine
