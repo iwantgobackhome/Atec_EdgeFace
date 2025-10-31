@@ -190,13 +190,28 @@ class UnifiedFaceDetector:
             # Handle MTCNN's specific parameter requirements
             if self.method == 'mtcnn':
                 try:
-                    return self.detector.detect_faces(
-                        image, 
-                        self.detector.min_face_size, 
-                        self.detector.thresholds, 
-                        self.detector.nms_thresholds, 
+                    bboxes, landmarks = self.detector.detect_faces(
+                        image,
+                        self.detector.min_face_size,
+                        self.detector.thresholds,
+                        self.detector.nms_thresholds,
                         self.detector.factor
                     )
+
+                    # Convert MTCNN landmark format from split to interleaved
+                    # MTCNN format: [x1, x2, x3, x4, x5, y1, y2, y3, y4, y5]
+                    # Target format: [x1, y1, x2, y2, x3, y3, x4, y4, x5, y5]
+                    if len(landmarks) > 0:
+                        converted_landmarks = []
+                        for lm in landmarks:
+                            # Interleave x and y coordinates
+                            interleaved = []
+                            for i in range(5):
+                                interleaved.extend([lm[i], lm[i + 5]])
+                            converted_landmarks.append(interleaved)
+                        landmarks = np.array(converted_landmarks)
+
+                    return bboxes, landmarks
                 except Exception as e:
                     print(f"MTCNN detect_faces error: {e}")
                     return np.array([]), np.array([])

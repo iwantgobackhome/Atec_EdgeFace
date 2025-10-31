@@ -169,13 +169,16 @@ class MTCNN():
             offsets = offsets[keep]
             landmarks = landmarks[keep]
 
-            # compute landmark points
+            # compute landmark points BEFORE calibrating bounding boxes
+            # MTCNN ONet outputs normalized landmark coordinates (0-1 range relative to bbox)
             width = bounding_boxes[:, 2] - bounding_boxes[:, 0] + 1.0
             height = bounding_boxes[:, 3] - bounding_boxes[:, 1] + 1.0
             xmin, ymin = bounding_boxes[:, 0], bounding_boxes[:, 1]
+            # Convert normalized coordinates to absolute pixel coordinates
             landmarks[:, 0:5] = np.expand_dims(xmin, 1) + np.expand_dims(width, 1) * landmarks[:, 0:5]
             landmarks[:, 5:10] = np.expand_dims(ymin, 1) + np.expand_dims(height, 1) * landmarks[:, 5:10]
 
+            # Now calibrate boxes and apply NMS - landmarks are already in absolute coordinates
             bounding_boxes = calibrate_box(bounding_boxes, offsets)
             keep = nms(bounding_boxes, nms_thresholds[2], mode='min')
             bounding_boxes = bounding_boxes[keep]
