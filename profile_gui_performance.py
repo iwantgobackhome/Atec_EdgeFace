@@ -9,17 +9,23 @@ import cv2
 import numpy as np
 import time
 import sys
+import tkinter as tk
 from PIL import Image, ImageTk
 
 sys.path.insert(0, 'face_alignment')
 
-def profile_gui_pipeline(detector_name, model_path, use_npu=False):
+def profile_gui_pipeline(detector_name, model_path, use_npu=False, root=None):
     """Profile actual GUI pipeline with all overhead"""
     print(f"\n{'='*60}")
     print(f"Profiling GUI Pipeline: {detector_name} (NPU: {use_npu})")
     print(f"{'='*60}")
 
     from face_recognition_system import FaceRecognitionSystem
+
+    # Create Tkinter root if not provided
+    if root is None:
+        root = tk.Tk()
+        root.withdraw()  # Hide the window
 
     system = FaceRecognitionSystem(
         detector_method=detector_name,
@@ -171,13 +177,17 @@ def compare_gui_vs_raw():
     print("GUI vs Raw Processing Performance Comparison")
     print("="*60)
 
+    # Create Tkinter root for both tests
+    root = tk.Tk()
+    root.withdraw()  # Hide the window
+
     # Test CPU
     print("\n\n### CPU Configuration ###")
-    cpu_result = profile_gui_pipeline('yunet', 'checkpoints/edgeface_xs_gamma_06.pt', use_npu=False)
+    cpu_result = profile_gui_pipeline('yunet', 'checkpoints/edgeface_xs_gamma_06.pt', use_npu=False, root=root)
 
     # Test NPU
     print("\n\n### NPU Configuration ###")
-    npu_result = profile_gui_pipeline('yunet_npu', 'checkpoints/edgeface_xs_gamma_06.dxnn', use_npu=True)
+    npu_result = profile_gui_pipeline('yunet_npu', 'checkpoints/edgeface_xs_gamma_06.dxnn', use_npu=True, root=root)
 
     # Summary
     print("\n\n" + "="*60)
