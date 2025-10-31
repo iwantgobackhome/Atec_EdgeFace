@@ -612,10 +612,12 @@ class FaceRecognitionGUI:
                     save_path = f"captured_references/{self.capture_person_id}/{angle_category}.jpg"
                     cv2.imwrite(save_path, cv2.cvtColor(np.array(aligned_face), cv2.COLOR_RGB2BGR))
 
+                    # Update reference list immediately after each capture
+                    self.update_reference_list()
+
                     # Check if all angles captured
                     if len(self.captured_angles) == len(self.required_angles):
                         self.log_status(f"🎉 All angles captured for {self.capture_person_id}!")
-                        self.update_reference_list()
                         messagebox.showinfo("Success", f"All angles captured for {self.capture_person_id}!")
                         self.cancel_capture()
 
