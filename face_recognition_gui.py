@@ -50,6 +50,8 @@ class FaceRecognitionGUI:
         self.cap: Optional[cv2.VideoCapture] = None
         self.current_frame = None
         self.current_landmarks = None
+        self.processing_frame = False  # Flag to prevent concurrent processing
+        self.last_process_time = 0  # Track last processing time
 
         # Multi-angle capture state
         self.capture_mode = False
@@ -387,39 +389,14 @@ class FaceRecognitionGUI:
                     # Store current frame for capture
                     self.current_frame = frame.copy()
 
-                    # Process frame
-                    annotated_frame, detections = self.system.process_frame(frame)
+                    # Skip processing if already processing (prevent frame buildup)
+                    current_time = time.time()
+                    if not self.processing_frame and (current_time - self.last_process_time) > 0.033:  # ~30 FPS max
+                        self.processing_frame = True
+                        self.last_process_time = current_time
 
-                    # Handle multi-angle capture mode
-                    if self.capture_mode and len(detections) > 0:
-                        det = detections[0]  # Use first detected face
-                        if det['landmarks'] is not None:
-                            self.current_landmarks = det['landmarks']
-                            self.auto_capture_angle(det['landmarks'])
-
-                    # Draw angle capture overlay if in capture mode
-                    if self.capture_mode:
-                        annotated_frame = self.draw_angle_overlay(annotated_frame)
-
-                    # Convert to RGB for display
-                    display_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-
-                    # Resize to fit display (max 800x600)
-                    h, w = display_frame.shape[:2]
-                    max_w, max_h = 800, 600
-                    if w > max_w or h > max_h:
-                        scale = min(max_w/w, max_h/h)
-                        new_w, new_h = int(w*scale), int(h*scale)
-                        display_frame = cv2.resize(display_frame, (new_w, new_h))
-
-                    # Convert to PhotoImage
-                    img = Image.fromarray(display_frame)
-                    imgtk = ImageTk.PhotoImage(image=img)
-
-                    # Update label
-                    self.video_label.imgtk = imgtk
-                    self.video_label.configure(image=imgtk)
-
+                        # Schedule processing in main thread
+                        self.root.after(0, self.process_and_display_frame, frame)
                 else:
                     consecutive_failures += 1
                     self.log_status(f"⚠️ Failed to retrieve frame ({consecutive_failures}/{max_failures})")
@@ -433,6 +410,48 @@ class FaceRecognitionGUI:
                 break
 
             time.sleep(0.01)  # Small delay
+
+    def process_and_display_frame(self, frame: np.ndarray):
+        """Process and display frame in main thread (Tkinter-safe)"""
+        try:
+            # Process frame
+            annotated_frame, detections = self.system.process_frame(frame)
+
+            # Handle multi-angle capture mode
+            if self.capture_mode and len(detections) > 0:
+                det = detections[0]  # Use first detected face
+                if det['landmarks'] is not None:
+                    self.current_landmarks = det['landmarks']
+                    self.auto_capture_angle(det['landmarks'])
+
+            # Draw angle capture overlay if in capture mode
+            if self.capture_mode:
+                annotated_frame = self.draw_angle_overlay(annotated_frame)
+
+            # Convert to RGB for display
+            display_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+
+            # Resize to fit display (max 800x600)
+            h, w = display_frame.shape[:2]
+            max_w, max_h = 800, 600
+            if w > max_w or h > max_h:
+                scale = min(max_w/w, max_h/h)
+                new_w, new_h = int(w*scale), int(h*scale)
+                display_frame = cv2.resize(display_frame, (new_w, new_h))
+
+            # Convert to PhotoImage and update display
+            img = Image.fromarray(display_frame)
+            imgtk = ImageTk.PhotoImage(image=img)
+
+            # Update label (keep reference to prevent garbage collection)
+            self.video_label.imgtk = imgtk
+            self.video_label.configure(image=imgtk)
+
+        except Exception as e:
+            self.log_status(f"⚠️ Error processing frame: {e}")
+        finally:
+            # Mark processing as complete
+            self.processing_frame = False
 
     def draw_angle_overlay(self, frame: np.ndarray) -> np.ndarray:
         """Draw angle capture progress overlay on frame"""
