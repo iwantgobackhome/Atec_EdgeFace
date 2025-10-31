@@ -63,10 +63,11 @@ class FaceRecognitionGUI:
         # Configuration
         self.detector_var = tk.StringVar(value='mtcnn')
         self.device_var = tk.StringVar(value='cuda')
+        self.use_npu_var = tk.BooleanVar(value=False)  # NPU checkbox
         self.threshold_var = tk.DoubleVar(value=0.5)
         self.camera_id_var = tk.IntVar(value=0)
 
-        # Model paths (will be updated based on device selection)
+        # Model paths
         self.model_path = 'checkpoints/edgeface_xs_gamma_06.pt'
         self.model_path_npu = 'checkpoints/edgeface_xs_gamma_06.dxnn'
         self.model_name = 'edgeface_xs_gamma_06'
@@ -99,15 +100,22 @@ class FaceRecognitionGUI:
         # Detector Selection
         ttk.Label(control_frame, text="Face Detector:").grid(row=row, column=0, sticky=tk.W, pady=5)
         detector_combo = ttk.Combobox(control_frame, textvariable=self.detector_var, state='readonly', width=20)
-        detector_combo['values'] = ('mtcnn', 'yunet', 'yunet_npu', 'yolov5_face', 'yolov8')
+        detector_combo['values'] = ('mtcnn', 'yunet', 'yolov5_face', 'yolov8')
         detector_combo.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5)
         detector_combo.bind('<<ComboboxSelected>>', self.on_detector_changed)
         row += 1
 
-        # Device Selection
+        # NPU Checkbox (only for yunet)
+        self.npu_checkbox = ttk.Checkbutton(control_frame, text="Use NPU (for YuNet)",
+                                           variable=self.use_npu_var,
+                                           command=self.on_npu_changed)
+        self.npu_checkbox.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
+        row += 1
+
+        # Device Selection (for EdgeFace model)
         ttk.Label(control_frame, text="Device:").grid(row=row, column=0, sticky=tk.W, pady=5)
         device_combo = ttk.Combobox(control_frame, textvariable=self.device_var, state='readonly', width=20)
-        device_combo['values'] = ('cuda', 'cpu', 'npu')
+        device_combo['values'] = ('cuda', 'cpu')
         device_combo.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5)
         device_combo.bind('<<ComboboxSelected>>', self.on_device_changed)
         row += 1
@@ -227,22 +235,19 @@ class FaceRecognitionGUI:
             # Determine device and model path
             device = self.device_var.get()
             detector = self.detector_var.get()
+            use_npu = self.use_npu_var.get()
 
-            # Auto-adjust detector if NPU device is selected
-            if device == 'npu' and detector == 'yunet':
+            # If YuNet is selected with NPU checkbox, use yunet_npu internally
+            if detector == 'yunet' and use_npu:
                 detector = 'yunet_npu'
-                self.detector_var.set('yunet_npu')
-                self.log_status(f"📌 Auto-switched detector to yunet_npu for NPU")
+                self.log_status(f"📌 Using YuNet with NPU acceleration")
 
-            # Select appropriate model path
-            # Use NPU model if device is 'npu' OR detector is 'yunet_npu'
-            if device == 'npu' or detector == 'yunet_npu':
+            # Select appropriate model path based on NPU checkbox
+            if use_npu:
                 model_path = self.model_path_npu
-                use_npu = True
                 self.log_status(f"📌 Using NPU model: {model_path}")
             else:
                 model_path = self.model_path
-                use_npu = False
                 self.log_status(f"📌 Using PyTorch model: {model_path}")
 
             self.system = FaceRecognitionSystem(
@@ -275,6 +280,18 @@ class FaceRecognitionGUI:
             messagebox.showwarning("Warning", "Stop camera before changing device")
             return
         self.log_status(f"🔄 Changing device to: {self.device_var.get()}")
+        self.initialize_system()
+
+    def on_npu_changed(self):
+        """Handle NPU checkbox change"""
+        if self.camera_running:
+            messagebox.showwarning("Warning", "Stop camera before changing NPU setting")
+            # Revert checkbox state
+            self.use_npu_var.set(not self.use_npu_var.get())
+            return
+
+        npu_enabled = self.use_npu_var.get()
+        self.log_status(f"🔄 NPU: {'Enabled' if npu_enabled else 'Disabled'}")
         self.initialize_system()
 
     def start_camera(self):
