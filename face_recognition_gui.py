@@ -408,10 +408,8 @@ class FaceRecognitionGUI:
                     self.current_frame = frame.copy()
 
                     # Skip processing if already processing (prevent frame buildup)
-                    current_time = time.time()
-                    if not self.processing_frame and (current_time - self.last_process_time) > 0.033:  # ~30 FPS max
+                    if not self.processing_frame:
                         self.processing_frame = True
-                        self.last_process_time = current_time
 
                         # Schedule processing in main thread
                         self.root.after(0, self.process_and_display_frame, frame)
@@ -427,7 +425,8 @@ class FaceRecognitionGUI:
                 self.log_status("❌ Camera is not opened")
                 break
 
-            time.sleep(0.01)  # Small delay
+            # Removed time.sleep(0.01) for better performance
+            # CPU will yield naturally during grab/retrieve operations
 
     def process_and_display_frame(self, frame: np.ndarray):
         """Process and display frame in main thread (Tkinter-safe)"""
