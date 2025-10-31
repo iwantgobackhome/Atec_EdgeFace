@@ -228,8 +228,15 @@ class FaceRecognitionGUI:
             device = self.device_var.get()
             detector = self.detector_var.get()
 
+            # Auto-adjust detector if NPU device is selected
+            if device == 'npu' and detector == 'yunet':
+                detector = 'yunet_npu'
+                self.detector_var.set('yunet_npu')
+                self.log_status(f"📌 Auto-switched detector to yunet_npu for NPU")
+
             # Select appropriate model path
-            if device == 'npu':
+            # Use NPU model if device is 'npu' OR detector is 'yunet_npu'
+            if device == 'npu' or detector == 'yunet_npu':
                 model_path = self.model_path_npu
                 use_npu = True
                 self.log_status(f"📌 Using NPU model: {model_path}")
@@ -237,12 +244,6 @@ class FaceRecognitionGUI:
                 model_path = self.model_path
                 use_npu = False
                 self.log_status(f"📌 Using PyTorch model: {model_path}")
-
-            # Auto-adjust detector if NPU device is selected
-            if device == 'npu' and detector == 'yunet':
-                detector = 'yunet_npu'
-                self.detector_var.set('yunet_npu')
-                self.log_status(f"📌 Auto-switched detector to yunet_npu for NPU")
 
             self.system = FaceRecognitionSystem(
                 detector_method=detector,
