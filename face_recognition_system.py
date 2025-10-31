@@ -379,7 +379,8 @@ class FaceRecognitionSystem:
         print("🚀 Initializing Face Recognition System...")
 
         # Determine if we should use NPU
-        self.use_npu = use_npu or device == 'npu'
+        # Automatically enable NPU for EdgeFace when yunet_npu is used
+        self.use_npu = use_npu or device == 'npu' or detector_method == 'yunet_npu'
 
         # Device setup for detector
         if self.use_npu:
@@ -388,6 +389,10 @@ class FaceRecognitionSystem:
         else:
             self.device = device if torch.cuda.is_available() else 'cpu'
             detector_device = self.device
+
+        # Override detector device for yunet_npu
+        if detector_method == 'yunet_npu':
+            detector_device = 'npu'
 
         # Initialize face detector
         print(f"📷 Initializing face detector: {detector_method}")
@@ -906,14 +911,14 @@ def main():
 
     parser = argparse.ArgumentParser(description='Real-time Face Recognition System')
     parser.add_argument('--detector', type=str, default='mtcnn',
-                       choices=['mtcnn', 'yunet', 'yolov5_face', 'yolov8'],
+                       choices=['mtcnn', 'yunet', 'yunet_npu', 'yolov5_face', 'yolov8'],
                        help='Face detection method')
     parser.add_argument('--model', type=str, default='checkpoints/edgeface_xs_gamma_06.pt',
-                       help='EdgeFace model path')
+                       help='EdgeFace model path (.pt for PyTorch, .dxnn for NPU)')
     parser.add_argument('--model-name', type=str, default='edgeface_xs_gamma_06',
                        help='EdgeFace model architecture name')
     parser.add_argument('--device', type=str, default='cuda',
-                       choices=['cuda', 'cpu'], help='Device to use')
+                       choices=['cuda', 'cpu', 'npu'], help='Device to use')
     parser.add_argument('--threshold', type=float, default=0.5,
                        help='Similarity threshold for recognition')
     parser.add_argument('--camera', type=int, default=0,

@@ -6,6 +6,12 @@ EdgeFace 얼굴 인식 시스템에 DeepX NPU 지원이 추가되었습니다.
 
 DeepX NPU를 사용하여 YuNet 얼굴 검출과 EdgeFace 얼굴 인식을 가속화할 수 있습니다.
 
+### ✨ 자동 NPU 활성화 (New!)
+
+**`detector_method='yunet_npu'` 선택 시, EdgeFace 인식 모델도 자동으로 NPU로 실행됩니다!**
+
+더 이상 `device='npu'` 또는 `use_npu=True`를 따로 설정할 필요가 없습니다.
+
 ### 지원하는 모델
 
 1. **YuNet Face Detector** (NPU)
@@ -87,28 +93,78 @@ python face_recognition_gui.py
 
 ### 2. Python 코드에서 사용
 
+#### 방법 1: 자동 NPU 활성화 (권장)
+
 ```python
 from face_recognition_system import FaceRecognitionSystem
 
-# NPU 모드로 시스템 초기화
+# yunet_npu만 선택하면 EdgeFace도 자동으로 NPU로 실행됩니다!
 system = FaceRecognitionSystem(
-    detector_method='yunet_npu',
+    detector_method='yunet_npu',  # 이것만으로 전체 NPU 활성화!
     edgeface_model_path='checkpoints/edgeface_xs_gamma_06.dxnn',
     edgeface_model_name='edgeface_xs_gamma_06',
-    device='npu',
-    similarity_threshold=0.5,
-    use_npu=True
+    similarity_threshold=0.5
 )
 
 # 카메라 실행
 system.run_camera(camera_id=0)
 ```
 
-### 3. NPU 모델 테스트
+#### 방법 2: 명시적 NPU 설정 (선택적)
 
-NPU 모델이 올바르게 작동하는지 확인:
+```python
+from face_recognition_system import FaceRecognitionSystem
+
+# 명시적으로 NPU 설정 (동일한 결과)
+system = FaceRecognitionSystem(
+    detector_method='yunet_npu',
+    edgeface_model_path='checkpoints/edgeface_xs_gamma_06.dxnn',
+    edgeface_model_name='edgeface_xs_gamma_06',
+    device='npu',        # 명시적 설정
+    use_npu=True,        # 명시적 설정
+    similarity_threshold=0.5
+)
+
+# 카메라 실행
+system.run_camera(camera_id=0)
+```
+
+### 3. 명령줄에서 NPU 사용
+
+#### 간단한 방법 (자동 NPU 활성화)
 
 ```bash
+# yunet_npu 선택만으로 전체 NPU 파이프라인 실행
+python3 face_recognition_system.py \
+    --detector yunet_npu \
+    --model checkpoints/edgeface_xs_gamma_06.dxnn \
+    --model-name edgeface_xs_gamma_06
+```
+
+#### 명시적 방법
+
+```bash
+# device=npu 추가 (선택적)
+python3 face_recognition_system.py \
+    --detector yunet_npu \
+    --model checkpoints/edgeface_xs_gamma_06.dxnn \
+    --model-name edgeface_xs_gamma_06 \
+    --device npu
+```
+
+### 4. NPU 모델 테스트
+
+#### 전체 시스템 테스트
+
+```bash
+# YuNet NPU + EdgeFace NPU 통합 테스트
+python3 test_npu_full_system.py
+```
+
+#### 개별 모델 테스트
+
+```bash
+# YuNet NPU 모델만 테스트
 python test_npu_models.py
 ```
 
@@ -118,6 +174,42 @@ python test_npu_models.py
 - 테스트 이미지로 추론 실행
 
 ## 구현 세부사항
+
+### 자동 NPU 활성화 로직
+
+`FaceRecognitionSystem.__init__()`에서 자동으로 NPU를 감지합니다:
+
+```python
+# face_recognition_system.py:383
+# Determine if we should use NPU
+# Automatically enable NPU for EdgeFace when yunet_npu is used
+self.use_npu = use_npu or device == 'npu' or detector_method == 'yunet_npu'
+```
+
+이 한 줄로:
+1. `detector_method='yunet_npu'` 선택 시 자동으로 `use_npu=True` 설정
+2. EdgeFace 초기화 시 NPU 모드로 자동 전환
+3. 별도의 설정 없이 전체 파이프라인이 NPU에서 실행
+
+```python
+# face_recognition_system.py:397-410
+if self.use_npu:
+    if not NPU_AVAILABLE:
+        raise ImportError("NPU recognizer not available. Install DeepX NPU SDK.")
+    # Use NPU recognizer (자동 선택!)
+    self.recognizer = EdgeFaceNPURecognizer(
+        edgeface_model_path,
+        edgeface_model_name,
+        device='npu'
+    )
+else:
+    # Use PyTorch recognizer
+    self.recognizer = EdgeFaceRecognizer(
+        edgeface_model_path,
+        edgeface_model_name,
+        self.device
+    )
+```
 
 ### YuNet NPU Detector
 
