@@ -22,6 +22,10 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 from typing import List, Tuple, Optional, Dict
+
+# matplotlib 백엔드를 Agg로 설정 (헤드리스 환경에서 실행 가능)
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import roc_curve, auc
@@ -378,26 +382,38 @@ def compare_landmarks(pairs: List[Tuple], detector_cpu, detector_npu, max_pairs:
 # ============================================================================
 
 def compare_embeddings(pairs: List[Tuple], detector, edgeface_pytorch, edgeface_npu,
-                       device: str, max_pairs: int = 100) -> Dict:
+                       device: str, detector_name: str, max_pairs: int = 100) -> Dict:
     """
     같은 얼굴에 대한 PyTorch vs NPU 임베딩 비교
+
+    Args:
+        pairs: Image pairs
+        detector: YuNet detector (CPU or NPU)
+        edgeface_pytorch: EdgeFace PyTorch model
+        edgeface_npu: EdgeFace NPU model
+        device: PyTorch device
+        detector_name: Name of detector for logging
+        max_pairs: Maximum pairs to evaluate
 
     Returns:
         Dict with embedding comparison statistics
     """
     results = {
+        'detector': detector_name,
         'cosine_similarities': [],  # Cosine similarity between PyTorch and NPU embeddings
         'l2_distances': [],  # L2 distance
         'pytorch_times': [],
         'npu_times': [],
+        'pytorch_embeddings': [],  # Store embeddings for distribution analysis
+        'npu_embeddings': [],
         'valid_pairs': 0
     }
 
-    print(f"\n=== Comparing EdgeFace Embeddings (PyTorch vs NPU) ===")
+    print(f"\n=== Comparing EdgeFace Embeddings (PyTorch vs NPU) with {detector_name} ===")
 
     sampled_pairs = pairs[:max_pairs] if max_pairs else pairs
 
-    for is_same, img1_path, img2_path in tqdm(sampled_pairs, desc="Embedding Comparison"):
+    for is_same, img1_path, img2_path in tqdm(sampled_pairs, desc=f"Embedding Comparison ({detector_name})"):
         for img_path in [img1_path, img2_path]:
             if not os.path.exists(img_path):
                 continue
@@ -419,12 +435,14 @@ def compare_embeddings(pairs: List[Tuple], detector, edgeface_pytorch, edgeface_
                 emb_pytorch = extract_embedding_pytorch(face_np, edgeface_pytorch, device)
                 pytorch_time = time.time() - start_time
                 results['pytorch_times'].append(pytorch_time)
+                results['pytorch_embeddings'].append(emb_pytorch)
 
                 # Extract NPU embedding
                 start_time = time.time()
                 emb_npu = extract_embedding_npu(face_np, edgeface_npu)
                 npu_time = time.time() - start_time
                 results['npu_times'].append(npu_time)
+                results['npu_embeddings'].append(emb_npu)
 
                 # Compare embeddings
                 cosine_sim = np.dot(emb_pytorch, emb_npu)
@@ -437,6 +455,10 @@ def compare_embeddings(pairs: List[Tuple], detector, edgeface_pytorch, edgeface_
             except Exception as e:
                 continue
 
+    # Convert to numpy arrays for analysis
+    results['pytorch_embeddings'] = np.array(results['pytorch_embeddings'])
+    results['npu_embeddings'] = np.array(results['npu_embeddings'])
+
     # Calculate statistics
     if results['cosine_similarities']:
         results['avg_cosine_similarity'] = np.mean(results['cosine_similarities'])
@@ -446,7 +468,7 @@ def compare_embeddings(pairs: List[Tuple], detector, edgeface_pytorch, edgeface_
         results['avg_pytorch_time'] = np.mean(results['pytorch_times'])
         results['avg_npu_time'] = np.mean(results['npu_times'])
 
-    print(f"\nEmbedding Comparison Results:")
+    print(f"\nEmbedding Comparison Results ({detector_name}):")
     print(f"  Valid pairs: {results['valid_pairs']}")
     if results['cosine_similarities']:
         print(f"  Avg cosine similarity: {results['avg_cosine_similarity']:.4f}")
@@ -673,38 +695,131 @@ def plot_landmark_comparison(landmark_comparison: Dict):
     plt.close()
 
 
-def plot_embedding_comparison(embedding_comparison: Dict):
-    """임베딩 비교 시각화"""
-    if not embedding_comparison or 'cosine_similarities' not in embedding_comparison:
+def plot_embedding_comparison(embedding_cpu: Dict, embedding_npu: Dict = None):
+    """
+    임베딩 비교 시각화
+
+    Args:
+        embedding_cpu: CPU YuNet으로 전처리한 임베딩 비교 결과
+        embedding_npu: NPU YuNet으로 전처리한 임베딩 비교 결과 (optional)
+    """
+    if not embedding_cpu or 'cosine_similarities' not in embedding_cpu:
         return
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    # Single detector case
+    if embedding_npu is None or 'cosine_similarities' not in embedding_npu:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Cosine similarity distribution
-    ax1.hist(embedding_comparison['cosine_similarities'], bins=30, alpha=0.7, color='green')
-    ax1.axvline(embedding_comparison['avg_cosine_similarity'], color='red',
-                linestyle='--', linewidth=2,
-                label=f"Mean: {embedding_comparison['avg_cosine_similarity']:.4f}")
-    ax1.set_xlabel('Cosine Similarity', fontsize=11)
-    ax1.set_ylabel('Frequency', fontsize=11)
-    ax1.set_title('PyTorch vs NPU Embedding Similarity', fontsize=12)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+        # Cosine similarity distribution
+        ax1.hist(embedding_cpu['cosine_similarities'], bins=30, alpha=0.7, color='green')
+        ax1.axvline(embedding_cpu['avg_cosine_similarity'], color='red',
+                    linestyle='--', linewidth=2,
+                    label=f"Mean: {embedding_cpu['avg_cosine_similarity']:.4f}")
+        ax1.set_xlabel('Cosine Similarity', fontsize=11)
+        ax1.set_ylabel('Frequency', fontsize=11)
+        ax1.set_title('PyTorch vs NPU Embedding Similarity', fontsize=12)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
 
-    # L2 distance distribution
-    ax2.hist(embedding_comparison['l2_distances'], bins=30, alpha=0.7, color='orange')
-    ax2.axvline(embedding_comparison['avg_l2_distance'], color='red',
-                linestyle='--', linewidth=2,
-                label=f"Mean: {embedding_comparison['avg_l2_distance']:.4f}")
-    ax2.set_xlabel('L2 Distance', fontsize=11)
-    ax2.set_ylabel('Frequency', fontsize=11)
-    ax2.set_title('PyTorch vs NPU Embedding Distance', fontsize=12)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+        # L2 distance distribution
+        ax2.hist(embedding_cpu['l2_distances'], bins=30, alpha=0.7, color='orange')
+        ax2.axvline(embedding_cpu['avg_l2_distance'], color='red',
+                    linestyle='--', linewidth=2,
+                    label=f"Mean: {embedding_cpu['avg_l2_distance']:.4f}")
+        ax2.set_xlabel('L2 Distance', fontsize=11)
+        ax2.set_ylabel('Frequency', fontsize=11)
+        ax2.set_title('PyTorch vs NPU Embedding Distance', fontsize=12)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
 
+        plt.tight_layout()
+        plt.savefig('edgeface_pytorch_vs_npu_embeddings.png', dpi=300, bbox_inches='tight')
+        print("Embedding comparison saved to: edgeface_pytorch_vs_npu_embeddings.png")
+        plt.close()
+        return
+
+    # Comparison with both CPU and NPU detectors
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+
+    # Row 1: CPU YuNet 전처리
+    # Cosine similarity
+    axes[0, 0].hist(embedding_cpu['cosine_similarities'], bins=30, alpha=0.7, color='blue')
+    axes[0, 0].axvline(embedding_cpu['avg_cosine_similarity'], color='red',
+                       linestyle='--', linewidth=2,
+                       label=f"Mean: {embedding_cpu['avg_cosine_similarity']:.4f}")
+    axes[0, 0].set_xlabel('Cosine Similarity', fontsize=10)
+    axes[0, 0].set_ylabel('Frequency', fontsize=10)
+    axes[0, 0].set_title(f'CPU YuNet: PyTorch vs NPU Similarity', fontsize=11)
+    axes[0, 0].legend(fontsize=9)
+    axes[0, 0].grid(True, alpha=0.3)
+
+    # L2 distance
+    axes[0, 1].hist(embedding_cpu['l2_distances'], bins=30, alpha=0.7, color='green')
+    axes[0, 1].axvline(embedding_cpu['avg_l2_distance'], color='red',
+                       linestyle='--', linewidth=2,
+                       label=f"Mean: {embedding_cpu['avg_l2_distance']:.4f}")
+    axes[0, 1].set_xlabel('L2 Distance', fontsize=10)
+    axes[0, 1].set_ylabel('Frequency', fontsize=10)
+    axes[0, 1].set_title(f'CPU YuNet: PyTorch vs NPU Distance', fontsize=11)
+    axes[0, 1].legend(fontsize=9)
+    axes[0, 1].grid(True, alpha=0.3)
+
+    # Embedding distribution (first 3 dimensions)
+    if len(embedding_cpu['pytorch_embeddings']) > 0:
+        axes[0, 2].scatter(embedding_cpu['pytorch_embeddings'][:, 0],
+                          embedding_cpu['pytorch_embeddings'][:, 1],
+                          alpha=0.5, s=10, label='PyTorch', color='blue')
+        axes[0, 2].scatter(embedding_cpu['npu_embeddings'][:, 0],
+                          embedding_cpu['npu_embeddings'][:, 1],
+                          alpha=0.5, s=10, label='NPU', color='red')
+        axes[0, 2].set_xlabel('Dim 0', fontsize=10)
+        axes[0, 2].set_ylabel('Dim 1', fontsize=10)
+        axes[0, 2].set_title('CPU YuNet: Embedding Space (first 2D)', fontsize=11)
+        axes[0, 2].legend(fontsize=9)
+        axes[0, 2].grid(True, alpha=0.3)
+
+    # Row 2: NPU YuNet 전처리
+    # Cosine similarity
+    axes[1, 0].hist(embedding_npu['cosine_similarities'], bins=30, alpha=0.7, color='blue')
+    axes[1, 0].axvline(embedding_npu['avg_cosine_similarity'], color='red',
+                       linestyle='--', linewidth=2,
+                       label=f"Mean: {embedding_npu['avg_cosine_similarity']:.4f}")
+    axes[1, 0].set_xlabel('Cosine Similarity', fontsize=10)
+    axes[1, 0].set_ylabel('Frequency', fontsize=10)
+    axes[1, 0].set_title(f'NPU YuNet: PyTorch vs NPU Similarity', fontsize=11)
+    axes[1, 0].legend(fontsize=9)
+    axes[1, 0].grid(True, alpha=0.3)
+
+    # L2 distance
+    axes[1, 1].hist(embedding_npu['l2_distances'], bins=30, alpha=0.7, color='green')
+    axes[1, 1].axvline(embedding_npu['avg_l2_distance'], color='red',
+                       linestyle='--', linewidth=2,
+                       label=f"Mean: {embedding_npu['avg_l2_distance']:.4f}")
+    axes[1, 1].set_xlabel('L2 Distance', fontsize=10)
+    axes[1, 1].set_ylabel('Frequency', fontsize=10)
+    axes[1, 1].set_title(f'NPU YuNet: PyTorch vs NPU Distance', fontsize=11)
+    axes[1, 1].legend(fontsize=9)
+    axes[1, 1].grid(True, alpha=0.3)
+
+    # Embedding distribution (first 2 dimensions)
+    if len(embedding_npu['pytorch_embeddings']) > 0:
+        axes[1, 2].scatter(embedding_npu['pytorch_embeddings'][:, 0],
+                          embedding_npu['pytorch_embeddings'][:, 1],
+                          alpha=0.5, s=10, label='PyTorch', color='blue')
+        axes[1, 2].scatter(embedding_npu['npu_embeddings'][:, 0],
+                          embedding_npu['npu_embeddings'][:, 1],
+                          alpha=0.5, s=10, label='NPU', color='red')
+        axes[1, 2].set_xlabel('Dim 0', fontsize=10)
+        axes[1, 2].set_ylabel('Dim 1', fontsize=10)
+        axes[1, 2].set_title('NPU YuNet: Embedding Space (first 2D)', fontsize=11)
+        axes[1, 2].legend(fontsize=9)
+        axes[1, 2].grid(True, alpha=0.3)
+
+    plt.suptitle('EdgeFace Embedding Comparison: Impact of YuNet Detector',
+                 fontsize=13, fontweight='bold')
     plt.tight_layout()
-    plt.savefig('edgeface_pytorch_vs_npu_embeddings.png', dpi=300, bbox_inches='tight')
-    print("Embedding comparison saved to: edgeface_pytorch_vs_npu_embeddings.png")
+    plt.savefig('edgeface_pytorch_vs_npu_embeddings_comparison.png', dpi=300, bbox_inches='tight')
+    print("Embedding comparison saved to: edgeface_pytorch_vs_npu_embeddings_comparison.png")
     plt.close()
 
 
@@ -828,11 +943,11 @@ def main():
     print("YuNet Detection Evaluation")
     print("="*80)
 
-    yunet_cpu_results = evaluate_yunet_detection(pairs, yunet_cpu, "YuNet CPU", max_pairs=500)
+    yunet_cpu_results = evaluate_yunet_detection(pairs, yunet_cpu, "YuNet CPU", max_pairs=None)
 
     yunet_npu_results = None
     if yunet_npu is not None:
-        yunet_npu_results = evaluate_yunet_detection(pairs, yunet_npu, "YuNet NPU", max_pairs=500)
+        yunet_npu_results = evaluate_yunet_detection(pairs, yunet_npu, "YuNet NPU", max_pairs=None)
 
         # 비교 시각화
         plot_yunet_comparison(yunet_cpu_results, yunet_npu_results)
@@ -847,15 +962,29 @@ def main():
         plot_landmark_comparison(landmark_comparison)
 
     # 임베딩 비교
+    embedding_cpu_comparison = None
+    embedding_npu_comparison = None
+
     if edgeface_npu is not None:
         print("\n" + "="*80)
-        print("Embedding Comparison")
+        print("Embedding Comparison: EdgeFace Performance with Different YuNet Detectors")
         print("="*80)
 
-        embedding_comparison = compare_embeddings(
-            pairs, yunet_cpu, edgeface_pytorch, edgeface_npu, device, max_pairs=100
+        # CPU YuNet으로 전처리 후 EdgeFace PyTorch vs NPU 비교
+        embedding_cpu_comparison = compare_embeddings(
+            pairs, yunet_cpu, edgeface_pytorch, edgeface_npu, device,
+            detector_name="YuNet CPU", max_pairs=500
         )
-        plot_embedding_comparison(embedding_comparison)
+
+        # NPU YuNet으로 전처리 후 EdgeFace PyTorch vs NPU 비교
+        if yunet_npu is not None:
+            embedding_npu_comparison = compare_embeddings(
+                pairs, yunet_npu, edgeface_pytorch, edgeface_npu, device,
+                detector_name="YuNet NPU", max_pairs=500
+            )
+
+        # 두 결과 비교 시각화
+        plot_embedding_comparison(embedding_cpu_comparison, embedding_npu_comparison)
 
     # End-to-End 파이프라인 평가
     print("\n" + "="*80)
